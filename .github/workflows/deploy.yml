@@ -1,0 +1,123 @@
+name: Deploy
+
+# Reemplaza el flujo manual (docker build/push + gcloud run deploy a mano) —
+# cada push a master construye SOLO las imágenes cuyo código cambió y las
+# despliega a los Cloud Run services/Jobs que infra/ ya provisionó. Esto NO
+# corre terraform: crear/borrar infra sigue siendo "terraform apply" a mano.
+on:
+  push:
+    branches: [master]
+
+concurrency:
+  # Un deploy por vez — si hacés push de nuevo mientras el anterior está
+  # corriendo, ese termina y el nuevo toma la posta (no se pisan a mitad de
+  # un `docker push` o `gcloud run services update`).
+  group: deploy-master
+  cancel-in-progress: true
+
+permissions:
+  # id-token: write es lo que le permite a GitHub firmar el token OIDC que
+  # canjea Workload Identity Federation (infra/github_actions.tf) — sin key
+  # de larga duración ninguna, bloqueadas por policy de organización en este
+  # proyecto (constraints/iam.disableServiceAccountKeyCreation).
+  id-token: write
+  contents: read
+
+env:
+  REGION: us-east1
+  REGISTRY: us-east1-docker.pkg.dev/warframe-plat-trader/warframe-plat-trader
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      report: ${{ steps.filter.outputs.report }}
+      scanner: ${{ steps.filter.outputs.scanner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web:
+              - 'app/**'
+              - 'server/**'
+            report:
+              - 'scripts/relic_analysis.py'
+              - 'scripts/report_server.py'
+              - 'scripts/warm_reports.py'
+              - 'scripts/db.py'
+              - 'scripts/Dockerfile.report'
+              - 'requirements.txt'
+            scanner:
+              - 'scripts/flips.py'
+              - 'scripts/db.py'
+              - 'scripts/Dockerfile.scanner'
+              - 'requirements.txt'
+
+  deploy:
+    needs: changes
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.report == 'true' || needs.changes.outputs.scanner == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          # Workload Identity Federation (infra/github_actions.tf) — el token
+          # OIDC que firma GitHub se canjea por credenciales de este service
+          # account SOLO para runs de Brollix/ninja-flip en la rama master
+          # (attribute_condition del provider), sin ninguna key guardada.
+          workload_identity_provider: projects/849528164416/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: warframe-plat-trader-deployer@warframe-plat-trader.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build & push web
+        if: needs.changes.outputs.web == 'true'
+        run: |
+          docker build -f server/Dockerfile -t ${{ env.REGISTRY }}/web:${{ github.sha }} .
+          docker push ${{ env.REGISTRY }}/web:${{ github.sha }}
+
+      - name: Deploy web
+        if: needs.changes.outputs.web == 'true'
+        run: |
+          gcloud run services update warframe-plat-trader-web \
+            --region ${{ env.REGION }} \
+            --image ${{ env.REGISTRY }}/web:${{ github.sha }}
+
+      - name: Build & push report
+        if: needs.changes.outputs.report == 'true'
+        run: |
+          docker build -f scripts/Dockerfile.report -t ${{ env.REGISTRY }}/report:${{ github.sha }} .
+          docker push ${{ env.REGISTRY }}/report:${{ github.sha }}
+
+      # report-warmer (Job) corre la MISMA imagen que report (Job), solo
+      # cambia el command — ver infra/cloud_run_report_warmer.tf. Los dos se
+      # actualizan juntos.
+      - name: Deploy report + report-warmer
+        if: needs.changes.outputs.report == 'true'
+        run: |
+          gcloud run services update warframe-plat-trader-report \
+            --region ${{ env.REGION }} \
+            --image ${{ env.REGISTRY }}/report:${{ github.sha }}
+          gcloud run jobs update warframe-plat-trader-report-warmer \
+            --region ${{ env.REGION }} \
+            --image ${{ env.REGISTRY }}/report:${{ github.sha }}
+
+      - name: Build & push scanner
+        if: needs.changes.outputs.scanner == 'true'
+        run: |
+          docker build -f scripts/Dockerfile.scanner -t ${{ env.REGISTRY }}/scanner:${{ github.sha }} .
+          docker push ${{ env.REGISTRY }}/scanner:${{ github.sha }}
+
+      - name: Deploy flip-scanner
+        if: needs.changes.outputs.scanner == 'true'
+        run: |
+          gcloud run jobs update warframe-plat-trader-flip-scanner \
+            --region ${{ env.REGION }} \
+            --image ${{ env.REGISTRY }}/scanner:${{ github.sha }}

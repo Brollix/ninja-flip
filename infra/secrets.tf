@@ -47,25 +47,33 @@ resource "google_secret_manager_secret" "patreon_client_id" {
   depends_on = [google_project_service.this]
   project    = var.project_id
   secret_id  = "patreon-client-id"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
 }
 resource "google_secret_manager_secret" "patreon_client_secret" {
   depends_on = [google_project_service.this]
   project    = var.project_id
   secret_id  = "patreon-client-secret"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
 }
 resource "google_secret_manager_secret" "patreon_creator_access_token" {
   depends_on = [google_project_service.this]
   project    = var.project_id
   secret_id  = "patreon-creator-access-token"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
 }
 resource "google_secret_manager_secret" "patreon_creator_refresh_token" {
   depends_on = [google_project_service.this]
   project    = var.project_id
   secret_id  = "patreon-creator-refresh-token"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
 }
 
 resource "google_secret_manager_secret_iam_member" "web_reads_patreon_client_id" {

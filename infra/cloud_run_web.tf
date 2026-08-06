@@ -56,25 +56,37 @@ resource "google_cloud_run_v2_service" "web" {
       env {
         name = "PATREON_CLIENT_ID"
         value_source {
-          secret_key_ref { secret = google_secret_manager_secret.patreon_client_id.secret_id, version = "latest" }
+          secret_key_ref {
+            secret  = google_secret_manager_secret.patreon_client_id.secret_id
+            version = "latest"
+          }
         }
       }
       env {
         name = "PATREON_CLIENT_SECRET"
         value_source {
-          secret_key_ref { secret = google_secret_manager_secret.patreon_client_secret.secret_id, version = "latest" }
+          secret_key_ref {
+            secret  = google_secret_manager_secret.patreon_client_secret.secret_id
+            version = "latest"
+          }
         }
       }
       env {
         name = "PATREON_CREATOR_ACCESS_TOKEN"
         value_source {
-          secret_key_ref { secret = google_secret_manager_secret.patreon_creator_access_token.secret_id, version = "latest" }
+          secret_key_ref {
+            secret  = google_secret_manager_secret.patreon_creator_access_token.secret_id
+            version = "latest"
+          }
         }
       }
       env {
         name = "PATREON_CREATOR_REFRESH_TOKEN"
         value_source {
-          secret_key_ref { secret = google_secret_manager_secret.patreon_creator_refresh_token.secret_id, version = "latest" }
+          secret_key_ref {
+            secret  = google_secret_manager_secret.patreon_creator_refresh_token.secret_id
+            version = "latest"
+          }
         }
       }
       resources {

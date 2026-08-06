@@ -34,6 +34,12 @@ variable "scanner_image" {
   type        = string
 }
 
+variable "github_repo" {
+  description = "Repo de GitHub (owner/name) autorizado a impersonar github_deployer vía Workload Identity Federation"
+  type        = string
+  default     = "Brollix/ninja-flip"
+}
+
 variable "report_ttl_seconds" {
   description = "TTL del cache de reporte por usuario (user_reports)"
   type        = number
