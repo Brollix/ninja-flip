@@ -430,6 +430,7 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
   const [connected, setConnected] = useState(isConnected());
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [soldOrder, setSoldOrder] = useState<CheckedOrder | null>(null);
+  const automationRef = useRef<HTMLDetailsElement>(null);
   const [basisEdit, setBasisEdit] = useState<{ id: string; value: number } | null>(null);
   // Separados a pedido: antes un solo toggle prendía/apagaba el undercut
   // para compras Y ventas a la vez — ahora cada lado se controla solo. Si
@@ -950,7 +951,7 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
           </button>
         )}
         {connected && isPremium() ? (
-          <details className="automation-panel">
+          <details className="automation-panel" ref={automationRef}>
             <summary className={`btn ${autoFixBuy || autoFixSell || autoPause || autoFill ? "ok" : ""}`}>
               <Zap size={12} className="inline-icon" /> Automation
               {(autoFixBuy || autoFixSell || autoPause || autoFill) && " · on"}
@@ -1000,6 +1001,11 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
                   </label>
                 </>
               )}
+              <div className="automation-panel-footer">
+                <button className="btn primary" onClick={() => { if (automationRef.current) automationRef.current.open = false; }}>
+                  <Check size={12} className="inline-icon" /> Accept
+                </button>
+              </div>
             </div>
           </details>
         ) : connected && (

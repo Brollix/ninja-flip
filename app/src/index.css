@@ -332,6 +332,10 @@ tbody tr:hover td { background: var(--surface-2); }
   box-shadow: var(--shadow-md); padding: var(--space-7); min-width: 280px;
 }
 .automation-panel-body .sim-field { color: var(--ink-2); }
+.automation-panel-footer {
+  display: flex; justify-content: flex-end; width: 100%;
+  margin-top: var(--space-3); padding-top: var(--space-5); border-top: 1px solid var(--grid);
+}
 
 /* ---------- buttons, tags, links ---------- */
 .btn {
