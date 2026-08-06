@@ -451,6 +451,25 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
   const [autoFill, setAutoFill] = useState(() => localStorage.getItem("wfm_autofill") === "true");
   const [autoFillScope, setAutoFillScope] = useState<"top" | "liquid">(
     () => (localStorage.getItem("wfm_autofill_scope") as "top" | "liquid") || "top");
+  // Qué tipos de item puede postear el auto-fill — todos prendidos por
+  // default (mismo comportamiento que antes de que existiera este filtro).
+  // Pensado para cuando te falta capital para algo en particular (ej. plata
+  // corta para primed mods/arcanos, ticket alto) sin tener que apagar todo
+  // auto-fill: destildás ese tipo y el resto sigue solo.
+  const [autoFillKinds, setAutoFillKinds] = useState<Set<"set" | "arcane" | "mod">>(() => {
+    try {
+      const raw = localStorage.getItem("wfm_autofill_kinds");
+      if (raw) return new Set(JSON.parse(raw));
+    } catch { /* noop */ }
+    return new Set(["set", "arcane", "mod"]);
+  });
+  const toggleAutoFillKind = (k: "set" | "arcane" | "mod") => {
+    setAutoFillKinds(prev => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  };
   const [autoFillBusy, setAutoFillBusy] = useState(false);
   const autoFillBusyRef = useRef(false);
   // Items que fallaron al postear en esta sesión (límite de órdenes de la
@@ -478,6 +497,9 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
   useEffect(() => {
     localStorage.setItem("wfm_autofill_scope", autoFillScope);
   }, [autoFillScope]);
+  useEffect(() => {
+    localStorage.setItem("wfm_autofill_kinds", JSON.stringify([...autoFillKinds]));
+  }, [autoFillKinds]);
 
   // Pausar = poner visible:false en todas tus órdenes activas (nadie puede
   // encontrarlas para contactarte) — NO es lo mismo que ponerte "invisible"
@@ -537,6 +559,7 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
     const cands = flips
       .filter(f => f.buy > 0 && f.vol48 >= 30 && f.sell > f.buy && !mine.has(f.slug) &&
                    !autoFillFailedRef.current.has(f.slug) &&
+                   (!f.kind || autoFillKinds.has(f.kind)) &&
                    (autoFillScope === "liquid" || (f.margin >= 12 && perTradeProfit(f) >= 15)))
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
       .slice(0, AUTO_FILL_MAX_PER_RUN);
@@ -577,13 +600,13 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
       setAutoFillBusy(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, basePlat, flips, autoFillScope]);
+  }, [orders, basePlat, flips, autoFillScope, autoFillKinds]);
 
   useEffect(() => {
     if (!autoFill || !isPremium() || !connected || autoFillBusyRef.current) return;
     runAutoFill();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoFill, connected, orders, flips, autoFillScope]);
+  }, [autoFill, connected, orders, flips, autoFillScope, autoFillKinds]);
 
   function saveBasis(o: CheckedOrder) {
     if (!basisEdit || basisEdit.id !== o.id) return;
@@ -957,11 +980,26 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
                 Auto-fill capital{autoFillBusy && "…"}
               </label>
               {autoFill && (
-                <select value={autoFillScope} onChange={e => setAutoFillScope(e.target.value as "top" | "liquid")}
-                        title="Which candidates to draw from">
-                  <option value="top">top picks only</option>
-                  <option value="liquid">any liquid flip</option>
-                </select>
+                <>
+                  <select value={autoFillScope} onChange={e => setAutoFillScope(e.target.value as "top" | "liquid")}
+                          title="Which candidates to draw from">
+                    <option value="top">top picks only</option>
+                    <option value="liquid">any liquid flip</option>
+                  </select>
+                  <span className="hint" style={{ margin: 0 }}>on:</span>
+                  <label className="chk" title="Prime sets (parts→set arbitrage included)">
+                    <input type="checkbox" checked={autoFillKinds.has("set")}
+                           onChange={() => toggleAutoFillKind("set")} /> sets
+                  </label>
+                  <label className="chk" title="Uncheck if you're short on the credits/plat these need right now">
+                    <input type="checkbox" checked={autoFillKinds.has("mod")}
+                           onChange={() => toggleAutoFillKind("mod")} /> primed mods
+                  </label>
+                  <label className="chk" title="Uncheck if you're short on the credits/plat these need right now">
+                    <input type="checkbox" checked={autoFillKinds.has("arcane")}
+                           onChange={() => toggleAutoFillKind("arcane")} /> arcanes
+                  </label>
+                </>
               )}
             </div>
           </details>
