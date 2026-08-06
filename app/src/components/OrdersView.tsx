@@ -964,10 +964,9 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
                 <input type="checkbox" checked={autoFixSell} onChange={e => setAutoFixSell(e.target.checked)} />
                 Auto-undercut sells
               </label>
-              <label className="sim-field" title="Profit floor: below this, the order gets deleted instead of undercut">
+              <label className="sim-field" title="Profit floor: below this, the order gets deleted instead of undercut. Only used once Auto-undercut buys/sells is on, but you can set it ahead of time.">
                 min profit
                 <input type="number" min={1} value={autoFixMinProfit}
-                       disabled={!autoFixBuy && !autoFixSell}
                        onChange={e => setAutoFixMinProfit(Math.max(1, +e.target.value || 1))}
                        style={{ width: 56 }} /> p
               </label>
