@@ -471,6 +471,17 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
       return next;
     });
   };
+  // runAutoFill posta de a una con pausas de 500ms entre cada createOrder —
+  // si destildás un kind (o apagás auto-fill entero) A MITAD de una tanda ya
+  // en curso, el `cands` que arma esa tanda quedó calculado con el filtro
+  // viejo. Estas refs siempre tienen el valor MÁS actual — se chequean de
+  // nuevo dentro del loop, justo antes de cada posteo, así una tanda en
+  // vuelo para cuando cambiás algo en vez de terminar de postear con el
+  // filtro que ya no vale.
+  const autoFillRef = useRef(autoFill);
+  useEffect(() => { autoFillRef.current = autoFill; }, [autoFill]);
+  const autoFillKindsRef = useRef(autoFillKinds);
+  useEffect(() => { autoFillKindsRef.current = autoFillKinds; }, [autoFillKinds]);
   const [autoFillBusy, setAutoFillBusy] = useState(false);
   const autoFillBusyRef = useRef(false);
   // Items que fallaron al postear en esta sesión (límite de órdenes de la
@@ -575,6 +586,8 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
       let cap = freeCapital;
       let posted = 0;
       for (const f of cands) {
+        if (!autoFillRef.current) break; // se apagó auto-fill mientras esta tanda posteaba
+        if (f.kind && !autoFillKindsRef.current.has(f.kind)) continue; // se destildó ese kind mientras posteaba
         const itemId = idBySlug.get(f.slug);
         if (!itemId) continue;
         const cost = Math.round(f.buy + 1);
