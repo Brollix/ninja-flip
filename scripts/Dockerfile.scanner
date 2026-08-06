@@ -1,0 +1,8 @@
+# Cloud Run Job "flip-scanner": flips.py, disparado por Cloud Scheduler.
+# Build desde la RAIZ del repo: docker build -f scripts/Dockerfile.scanner -t scanner .
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY scripts/ ./
+CMD ["python", "flips.py"]

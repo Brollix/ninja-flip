@@ -1,0 +1,11 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - scripts/Dockerfile.scanner
+      - -t
+      - us-east1-docker.pkg.dev/warframe-plat-trader/warframe-plat-trader/scanner:latest
+      - .
+images:
+  - us-east1-docker.pkg.dev/warframe-plat-trader/warframe-plat-trader/scanner:latest

@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 // SQLite integrado de Node (>= 22.5) — sin dependencias nativas
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
+import { exec } from 'node:child_process'
 
 // ---------------------------------------------------------------------------
 // Ledger: persistencia REAL en disco (alecaframe-api/ledger.db) para el
@@ -86,9 +87,28 @@ function ledgerPlugin(): Plugin {
   }
 }
 
+// ---------------------------------------------------------------------------
+// ¿Warframe abierto? Solo mira la lista de procesos de Windows (tasklist) —
+// nada de leer memoria del juego ni sus archivos internos. Lo usa el
+// frontend para decidir cuándo pedirle a warframe.market "estoy in game".
+// ---------------------------------------------------------------------------
+function gameStatusPlugin(): Plugin {
+  return {
+    name: 'game-status',
+    configureServer(server) {
+      server.middlewares.use('/game/status', (_req, res) => {
+        exec('tasklist /FI "IMAGENAME eq Warframe.x64.exe" /NH', (_err, stdout = '') => {
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ running: stdout.toLowerCase().includes('warframe.x64.exe') }))
+        })
+      })
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), ledgerPlugin()],
+  plugins: [react(), ledgerPlugin(), gameStatusPlugin()],
   server: {
     proxy: {
       // La API de warframe.market no manda CORS: la proxeamos same-origin.

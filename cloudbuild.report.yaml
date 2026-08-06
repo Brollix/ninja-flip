@@ -1,0 +1,11 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - scripts/Dockerfile.report
+      - -t
+      - us-east1-docker.pkg.dev/warframe-plat-trader/warframe-plat-trader/report:latest
+      - .
+images:
+  - us-east1-docker.pkg.dev/warframe-plat-trader/warframe-plat-trader/report:latest

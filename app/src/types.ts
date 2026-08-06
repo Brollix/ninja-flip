@@ -58,6 +58,20 @@ export interface Sale {
   partial: boolean;
 }
 
+/** Compra real detectada en tu historial de trades de AlecaFrame (lo inverso
+ *  de Sale) — de acá sale "recent purchases → post a sell order" sin
+ *  depender de que marques a mano un WTB como comprado. */
+export interface Purchase {
+  ts: string;
+  user: string;
+  item: string;
+  qty: number;
+  /** null si el trade mezcló varios items distintos — no se puede repartir
+   *  el costo con precisión, se completa a mano al postear */
+  plat_paid: number | null;
+  market_now: number;
+}
+
 export interface HistoryPoint {
   ts: string;
   plat: number;
@@ -76,18 +90,23 @@ export interface Report {
   username: string | null;
   relics: RelicRaw[];
   sales: Sale[];
+  unsold_purchases: Purchase[];
   history: HistoryPoint[];
 }
 
 export interface Flip {
   name: string;
   slug: string;
+  kind?: "set" | "arcane" | "mod";
+  /** rango que se flipea (maxeado en arcanos/primed, 0 en sets) */
+  rank?: number;
   buy: number;
   sell: number;
   spread: number;
   margin: number;
   vol48: number;
-  med48: number;
+  /** margen% × ventas48h(con techo) × log(spread) — ver flip_score en scripts/flips.py */
+  score: number;
   parts_total?: number;
   parts_profit?: number;
   parts_detail?: string;

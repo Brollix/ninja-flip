@@ -1,6 +1,38 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { Check, Lock, TriangleAlert } from "lucide-react";
 import { copyText, marketUrl } from "../lib";
+import { startPatreonConnect } from "../wfm";
+
+/** Reemplaza una feature premium para cuentas basic. El botón manda al
+ *  browser a loguearse con la cuenta de Patreon del usuario (OAuth real,
+ *  ver premium.ts/wfm.ts) — vuelve solo a esta misma página cuando termina. */
+export function PremiumLock({ feature }: { feature: string }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function connect() {
+    setBusy(true); setMsg(null);
+    try {
+      await startPatreonConnect(); // navega afuera de la app; no vuelve acá si sale bien
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="premium-lock">
+      <Lock size={14} className="inline-icon" /> <b>{feature}</b> is a premium feature.
+      <div className="premium-lock-connect">
+        <button className="btn primary" disabled={busy} onClick={connect}>
+          {busy ? "redirecting…" : "Connect with Patreon"}
+        </button>
+      </div>
+      {msg && <p className="hint" style={{ marginTop: 8 }}>{msg}</p>}
+    </div>
+  );
+}
 
 // ---------- ordenamiento ----------
 
@@ -84,7 +116,7 @@ export function DataTable<T>({ cols, rows, defaultSort, defaultDir = -1, maxRows
 
 // ---------- piezas chicas ----------
 
-export function CopyBtn({ text, label }: { text: string; label: string }) {
+export function CopyBtn({ text, label }: { text: string; label: ReactNode }) {
   const [ok, setOk] = useState(false);
   return (
     <button className={`btn ${ok ? "ok" : ""}`}
@@ -92,8 +124,20 @@ export function CopyBtn({ text, label }: { text: string; label: string }) {
               setOk(true);
               setTimeout(() => setOk(false), 1400);
             })}>
-      {ok ? "✓ copiado" : label}
+      {ok ? <><Check size={12} className="inline-icon" /> copiado</> : label}
     </button>
+  );
+}
+
+/** Monto de plat truncado (sin decimal) + el ícono de platino en vez de la
+ *  letra "p" — para los números "punchline" destacados (picks de Flips). */
+export function Plat({ value, sign }: { value: number; sign?: boolean }) {
+  const prefix = sign && value >= 0 ? "+" : "";
+  return (
+    <>
+      {prefix}{Math.trunc(value)}
+      <img src="/platinum.webp" alt="p" className="plat-icon" />
+    </>
   );
 }
 
@@ -112,7 +156,13 @@ export function Tag({ kind, children, title }: { kind?: string; children: ReactN
 }
 
 export function VolBadge({ vol }: { vol: number }) {
-  if (vol < 5) return <span className="lowvol" title="Low demand: may take a while to sell">{vol} ⚠</span>;
+  if (vol < 5) {
+    return (
+      <span className="lowvol" title="Low demand: may take a while to sell">
+        {vol} <TriangleAlert size={11} className="inline-icon" />
+      </span>
+    );
+  }
   return <>{vol}</>;
 }
 

@@ -21,6 +21,8 @@ export interface WfmOrder {
 
 const JWT_KEY = "wfm_jwt";
 const USER_KEY = "wfm_user_info";
+const BASIS_KEY = "cost_basis_v1";
+const FLIPS_KEY = "flips_log_v1";
 
 export const getJwt = (): string | null => localStorage.getItem(JWT_KEY);
 export const getUser = (): WfmUser | null => {
@@ -29,9 +31,22 @@ export const getUser = (): WfmUser | null => {
 };
 export const isConnected = (): boolean => !!getJwt();
 
+// Todo lo demás cacheado en localStorage (flips, cost basis, plat override,
+// filtro de usuario de AlecaFrame, skip del token, compras ya vistas) es
+// data de ESTA cuenta — si alguien más se loguea después en el mismo
+// navegador (vos probando y después le pasás la compu a un amigo, por
+// ejemplo), syncLedger() subiría tu historial como si fuera el suyo si no
+// se limpia acá. Sin esto, cambiar de cuenta en el mismo browser mezclaba
+// los datos financieros de dos personas distintas.
+const PER_USER_KEYS = [
+  BASIS_KEY, FLIPS_KEY, "wfm_user", "plat_override",
+  "aleca_skip_v1", "purchases_dismissed_v1",
+];
+
 export function signOut(): void {
   localStorage.removeItem(JWT_KEY);
   localStorage.removeItem(USER_KEY);
+  for (const k of PER_USER_KEYS) localStorage.removeItem(k);
   notify();
 }
 
@@ -42,6 +57,92 @@ export function onAuthChange(fn: () => void): () => void {
   return () => listeners.delete(fn);
 }
 const notify = () => listeners.forEach(fn => fn());
+
+// ---------- premium / admin ----------
+// Todavía no hay Patreon (ni ningún cobro real) conectado — mientras tanto,
+// estas cuentas quedan "siempre premium" a mano (los primeros en probar
+// esto, gratis de por vida). Por wfm_user_id (el ID interno, permanente),
+// no por slug — el nombre de usuario se puede cambiar, el ID no. Reemplazar
+// por un chequeo real de membresía cuando exista la integración con Patreon.
+const ALWAYS_PREMIUM_IDS = new Set([
+  "5b9bf77418d4f700ad180263", // Brollix
+  "69b9a72a4a1f65002a9db15b", // Spazz_0000
+]);
+// Solo vos podés ver el toggle de "previsualizar como basic/premium" —
+// nadie más ve ni puede tocar esto.
+const ADMIN_IDS = new Set(["5b9bf77418d4f700ad180263"]); // Brollix
+
+const PREVIEW_KEY = "admin_preview_mode"; // "basic" | "premium" | ausente
+
+function currentUserId(): string | null {
+  return getUser()?.id ?? null;
+}
+
+export function isAdmin(): boolean {
+  const id = currentUserId();
+  return id != null && ADMIN_IDS.has(id);
+}
+
+export function getPreviewMode(): "basic" | "premium" | null {
+  if (!isAdmin()) return null; // el override solo aplica para el admin
+  const v = localStorage.getItem(PREVIEW_KEY);
+  return v === "basic" || v === "premium" ? v : null;
+}
+
+export function setPreviewMode(mode: "basic" | "premium" | null): void {
+  if (mode) localStorage.setItem(PREVIEW_KEY, mode);
+  else localStorage.removeItem(PREVIEW_KEY);
+  notify(); // reusa el pub/sub de auth para que la UI se actualice sola
+}
+
+// Estado real de Patreon, traído del server (ver premium.ts) — cache en
+// memoria llenado por syncPremiumStatus(), mismo patrón que
+// detectedFlipsCache: se lee sincrónico acá, se llena async en otro lado
+// (App.tsx, junto al resto del refresh de arranque).
+let premiumServerCache: boolean | null = null;
+
+export async function syncPremiumStatus(): Promise<void> {
+  try {
+    const p = ledgerFetch("/api/premium");
+    if (!p) return; // sin sesión de wfm: no hay a quién chequear
+    const res = await p;
+    if (!res.ok) return;
+    const body = (await res.json()) as { premium?: boolean };
+    const next = !!body.premium;
+    // Notificar solo si CAMBIÓ: App.tsx suscribe refresh() a onAuthChange, y
+    // refresh() llama syncPremiumStatus() — notificar siempre creaba un loop
+    // infinito (refresh -> syncPremiumStatus -> notify -> refresh -> ...),
+    // atado solo a la latencia de red. Esto fue lo que vació la cuota de
+    // transferencia de datos de Neon en producción (~1.8GB/hora).
+    if (next !== premiumServerCache) {
+      premiumServerCache = next;
+      notify();
+    }
+  } catch { /* sin red: se queda con lo que ya tenía */ }
+}
+
+/** Manda al browser a loguearse con SU cuenta de Patreon ("Connect with
+ *  Patreon" real, no un email tipeado a mano) — navegación de página entera,
+ *  no fetch, porque Patreon tiene que mostrar su propia pantalla de login.
+ *  Vuelve a esta misma app en /api/patreon/callback -> redirect a "/". */
+export async function startPatreonConnect(): Promise<void> {
+  const jwt = getJwt();
+  if (!jwt) throw new Error("Not connected to warframe.market");
+  const res = await fetch("/api/premium/authorize", {
+    headers: { Authorization: `Bearer ${jwt}` },
+  });
+  const body = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
+  if (!res.ok || !body.url) throw new Error(body.error ?? `http ${res.status}`);
+  window.location.href = body.url;
+}
+
+export function isPremium(): boolean {
+  const preview = getPreviewMode();
+  if (preview) return preview === "premium";
+  const id = currentUserId();
+  if (id != null && ALWAYS_PREMIUM_IDS.has(id)) return true;
+  return premiumServerCache === true;
+}
 
 export async function signIn(email: string, password: string): Promise<WfmUser> {
   const res = await wfmFetch("/wfm/v1/auth/signin", {
@@ -92,6 +193,13 @@ async function authed(path: string, init: RequestInit = {}): Promise<unknown> {
     throw new Error("Session expired — reconnect");
   }
   if (!res.ok) {
+    // Traduce los códigos de error de wfm que sabemos que vamos a pisar
+    // seguido (el usuario ya se topó con este en producción) — el resto
+    // se muestra crudo, no inventamos traducciones de códigos que no
+    // confirmamos que existan.
+    if (errStr.includes("exceededOrderLimitSamePrice")) {
+      throw new Error("You already have an order for this item at that exact price — pick a different price.");
+    }
     throw new Error(`Market error: ${errStr || res.status}`);
   }
   return body;
@@ -101,6 +209,14 @@ interface OrderPayload { data?: WfmOrder }
 
 export async function createOrder(params: {
   itemId: string; type: "buy" | "sell"; platinum: number; quantity: number;
+  rank?: number;
+  /** items con variantes de subtipo (ej. Primed Target Cracker: "regular" vs
+   *  "atragraph") lo exigen en la orden — sin esto la API rechaza el POST
+   *  con "subtype: app.field.required". */
+  subtype?: string;
+  /** solo los items "bulkTradable" (arcanos) aceptan perTrade — a los demás
+   *  (sets, primed mods) la API se lo rechaza si se lo mandás. */
+  bulkTradable?: boolean;
 }): Promise<WfmOrder | undefined> {
   const body = (await authed("/v2/order", {
     method: "POST",
@@ -110,23 +226,34 @@ export async function createOrder(params: {
       platinum: Math.round(params.platinum),
       quantity: Math.max(1, Math.round(params.quantity)),
       visible: true,
+      ...(params.rank != null ? { rank: params.rank } : {}),
+      ...(params.subtype ? { subtype: params.subtype } : {}),
+      ...(params.bulkTradable ? { perTrade: 1 } : {}),
     }),
   })) as OrderPayload;
   return body.data;
 }
 
 export async function updateOrder(orderId: string, params: {
-  platinum: number; quantity?: number;
+  platinum: number; quantity?: number; visible?: boolean;
 }): Promise<WfmOrder | undefined> {
   const body = (await authed(`/v2/order/${orderId}`, {
     method: "PATCH",
     body: JSON.stringify({
       platinum: Math.round(params.platinum),
       ...(params.quantity ? { quantity: Math.round(params.quantity) } : {}),
-      visible: true,
+      visible: params.visible ?? true,
     }),
   })) as OrderPayload;
   return body.data;
+}
+
+/** Solo cambia visible, sin tocar precio/cantidad — usado por la pausa
+ *  manual/automática (ver OrdersView). No existe un PATCH "solo visible" en
+ *  la v2 de wfm, así que hay que mandar platinum igual: el mismo que ya
+ *  tenía la orden, para no pisarlo de paso. */
+export async function setOrderVisible(orderId: string, platinum: number, visible: boolean): Promise<WfmOrder | undefined> {
+  return updateOrder(orderId, { platinum, visible });
 }
 
 export async function deleteOrder(orderId: string): Promise<void> {
@@ -178,15 +305,31 @@ export async function fetchMyOrders(): Promise<unknown[] | null> {
 
 // ---------- cost basis: lo que pagaste, para calcular el delta al vender ----------
 
-const BASIS_KEY = "cost_basis_v1";
-const FLIPS_KEY = "flips_log_v1";
-
 interface BasisEntry { cost: number; item: string; ts: number }
-export interface FlipRecord { item: string; buy: number; sell: number; ts: number }
+export interface FlipRecord {
+  item: string; buy: number; sell: number; ts: number;
+  /** cuánto vale HOY lo mismo que flipeaste — solo en flips auto-detectados
+   *  (AlecaFrame), no en los que confirmás a mano con 🛒/💰. */
+  market_now?: number;
+}
 
 function basisMap(): Record<string, BasisEntry> {
   try { return JSON.parse(localStorage.getItem(BASIS_KEY) ?? "{}"); }
   catch { return {}; }
+}
+
+/** El ledger ahora vive en Postgres, por usuario — identificado por el JWT
+ *  de warframe.market (mismo que ya usás para todo lo demás, sin login
+ *  aparte). Sin sesión no hay a quién scopear estas filas, así que no pega
+ *  a la red — localStorage sigue mandando en ese caso, igual que antes
+ *  cuando no había server de ledger corriendo. */
+function ledgerFetch(path: string, init: RequestInit = {}): Promise<Response> | null {
+  const jwt = getJwt();
+  if (!jwt) return null;
+  return fetch(path, {
+    ...init,
+    headers: { ...(init.headers ?? {}), Authorization: `Bearer ${jwt}` },
+  });
 }
 
 export function setCostBasis(orderId: string, cost: number, item: string): void {
@@ -195,10 +338,10 @@ export function setCostBasis(orderId: string, cost: number, item: string): void 
   m[orderId] = entry;
   localStorage.setItem(BASIS_KEY, JSON.stringify(m));
   // espejo al ledger en disco (fire-and-forget)
-  fetch("/ledger/basis", {
+  ledgerFetch("/ledger/basis", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ orderId, ...entry }),
-  }).catch(() => {});
+  })?.catch(() => {});
 }
 
 export function getCostBasis(orderId: string): BasisEntry | null {
@@ -211,7 +354,7 @@ export function removeCostBasis(orderId: string): void {
     delete m[orderId];
     localStorage.setItem(BASIS_KEY, JSON.stringify(m));
   }
-  fetch(`/ledger/basis/${encodeURIComponent(orderId)}`, { method: "DELETE" }).catch(() => {});
+  ledgerFetch(`/ledger/basis/${encodeURIComponent(orderId)}`, { method: "DELETE" })?.catch(() => {});
 }
 
 export function logFlip(f: FlipRecord): void {
@@ -220,22 +363,46 @@ export function logFlip(f: FlipRecord): void {
     list.push(f);
     localStorage.setItem(FLIPS_KEY, JSON.stringify(list));
   } catch { /* localStorage lleno o corrupto: el flip igual se cerró */ }
-  fetch("/ledger/flip", {
+  ledgerFetch("/ledger/flip", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(f),
-  }).catch(() => {});
+  })?.catch(() => {});
+}
+
+// Flips detectados automáticamente del historial de trades de AlecaFrame
+// (tabla separada, user_detected_flips — ver report_server.py). Nunca se
+// crean del lado del cliente, solo se leen: alcanza con un cache en memoria
+// llenado en cada syncLedger().
+let detectedFlipsCache: FlipRecord[] = [];
+export function getDetectedFlips(): FlipRecord[] {
+  return detectedFlipsCache;
+}
+
+/** Manuales (🛒/💰 en la app) + detectados del historial de AlecaFrame, en un
+ *  solo Flip History. El MISMO trade real puede quedar en las dos tablas (lo
+ *  confirmaste a mano Y AlecaFrame lo vio en tu historial) — se descarta el
+ *  detectado si ya hay uno manual del mismo item a un precio de venta
+ *  parecido (±1p). Un solo lugar para esta regla — OrdersView y cualquier
+ *  otra vista que agrupe flips (ver views.tsx) parten de acá. */
+export function getAllFlips(): FlipRecord[] {
+  const flips = getFlips();
+  const detected = getDetectedFlips().filter(d =>
+    !flips.some(f => f.item === d.item && Math.abs(f.sell - d.sell) <= 1));
+  return [...flips, ...detected];
 }
 
 /** Sincroniza el ledger en disco con localStorage (dos vías) al arrancar:
  *  restaura lo que falte localmente y sube lo que falte en la base. */
 export async function syncLedger(): Promise<void> {
   try {
-    const res = await fetch("/ledger/all");
-    if (!res.ok) return;
+    const res = await ledgerFetch("/ledger/all");
+    if (!res || !res.ok) return;
     const server = (await res.json()) as {
       flips: FlipRecord[];
       basis: Record<string, BasisEntry>;
+      detectedFlips?: FlipRecord[];
     };
+    detectedFlipsCache = server.detectedFlips ?? [];
     // flips: unión por (item, ts)
     const local = getFlips();
     const key = (f: FlipRecord) => `${f.item}|${f.ts}`;
@@ -245,10 +412,10 @@ export async function syncLedger(): Promise<void> {
       .sort((a, b) => a.ts - b.ts);
     localStorage.setItem(FLIPS_KEY, JSON.stringify(merged));
     for (const f of local.filter(f => !serverKeys.has(key(f)))) {
-      await fetch("/ledger/flip", {
+      await ledgerFetch("/ledger/flip", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(f),
-      }).catch(() => {});
+      })?.catch(() => {});
     }
     // basis: unión por orderId
     const localBasis = basisMap();
@@ -256,10 +423,10 @@ export async function syncLedger(): Promise<void> {
     localStorage.setItem(BASIS_KEY, JSON.stringify(mergedBasis));
     for (const [id, b] of Object.entries(localBasis)) {
       if (!(id in server.basis)) {
-        await fetch("/ledger/basis", {
+        await ledgerFetch("/ledger/basis", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ orderId: id, ...b }),
-        }).catch(() => {});
+        })?.catch(() => {});
       }
     }
   } catch { /* sin server de ledger (build estático): localStorage sigue mandando */ }
@@ -275,9 +442,86 @@ export function getFlips(): FlipRecord[] {
 let itemsCache: Record<string, [string, string]> | null = null;
 export async function loadItems(): Promise<Record<string, [string, string]>> {
   if (!itemsCache) {
-    itemsCache = await (await fetch("data/items.json")).json();
+    itemsCache = await (await fetch("/api/items", { cache: "no-store" })).json();
   }
   return itemsCache!;
+}
+
+/** Nombre de AlecaFrame ("Arcane Hot Shot") -> {id, slug} del catálogo, para
+ *  abrir el composer desde una compra detectada (solo tenemos el nombre,
+ *  no el slug — a diferencia de Flips/Sniper que ya vienen con slug). */
+export async function resolveItemByName(name: string): Promise<{ id: string; slug: string } | null> {
+  const items = await loadItems();
+  const target = name.trim().toLowerCase();
+  for (const [id, [slug, itemName]] of Object.entries(items)) {
+    if (itemName.trim().toLowerCase() === target) return { id, slug };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Snapshots de plat propios: cada compra/venta confirmada en la app (o
+// corrección manual) queda registrada acá con su timestamp real — a
+// diferencia del historial de AlecaFrame (un punto por día, cuando corre su
+// propio sync), esto se mueve por ACCIÓN además de por tiempo. Es una
+// ESTIMACIÓN acumulada (arranca del último valor conocido y suma/resta lo
+// que vas confirmando en la app) hasta que un snapshot nuevo de AlecaFrame
+// la confirma — si no coincide exacto, la diferencia se asume gastada/
+// ganada por fuera de la app (trade manual, plat comprada con plata real,
+// etc.), no un error nuestro.
+// ---------------------------------------------------------------------------
+export interface PlatSnapshot { ts: number; plat: number }
+export interface PlatReconciliation { ts: number; delta: number }
+
+const PLAT_SNAPSHOTS_KEY = "plat_snapshots_v1";
+const PLAT_RECON_KEY = "plat_reconciliations_v1";
+const MAX_PLAT_SNAPSHOTS = 300;
+const MAX_PLAT_RECONCILIATIONS = 50;
+
+export function getPlatSnapshots(): PlatSnapshot[] {
+  try { return JSON.parse(localStorage.getItem(PLAT_SNAPSHOTS_KEY) ?? "[]"); }
+  catch { return []; }
+}
+
+function logPlatSnapshot(plat: number): void {
+  const snaps = getPlatSnapshots();
+  snaps.push({ ts: Date.now(), plat: Math.round(plat) });
+  localStorage.setItem(PLAT_SNAPSHOTS_KEY, JSON.stringify(snaps.slice(-MAX_PLAT_SNAPSHOTS)));
+}
+
+export function getPlatReconciliations(): PlatReconciliation[] {
+  try { return JSON.parse(localStorage.getItem(PLAT_RECON_KEY) ?? "[]"); }
+  catch { return []; }
+}
+
+/** Se llama con el snapshot MÁS NUEVO de AlecaFrame — si había estimaciones
+ *  nuestras de antes de esa fecha, compara la última contra el valor real
+ *  que confirmó Aleca y, si no coincide, guarda la diferencia como un
+ *  ajuste (plat movida por fuera de la app). Después descarta esas
+ *  estimaciones viejas: ya quedaron cubiertas por el dato real. */
+export function reconcilePlatSnapshots(officialTs: number, officialPlat: number): void {
+  const snaps = getPlatSnapshots();
+  const before = snaps.filter(s => s.ts <= officialTs);
+  if (before.length) {
+    const delta = Math.round(officialPlat - before[before.length - 1].plat);
+    if (delta !== 0) {
+      const recon = getPlatReconciliations();
+      recon.push({ ts: officialTs, delta });
+      localStorage.setItem(PLAT_RECON_KEY, JSON.stringify(recon.slice(-MAX_PLAT_RECONCILIATIONS)));
+    }
+  }
+  const after = snaps.filter(s => s.ts > officialTs);
+  localStorage.setItem(PLAT_SNAPSHOTS_KEY, JSON.stringify(after));
+}
+
+/** Fija tu plat "actual" (compra/venta confirmada o corrección manual) y
+ *  deja un snapshot con timestamp real — único punto de escritura de
+ *  plat_override, así ningún caller se olvida de loguear el snapshot. */
+export function setPlatOverride(value: number): void {
+  const v = Math.max(0, Math.round(value));
+  localStorage.setItem("plat_override", JSON.stringify({ value: v, ts: Date.now() }));
+  logPlatSnapshot(v);
+  window.dispatchEvent(new CustomEvent("plat:changed"));
 }
 
 export function adjustPlat(amount: number, basePlat: number): void {
@@ -286,9 +530,5 @@ export function adjustPlat(amount: number, basePlat: number): void {
     override = JSON.parse(localStorage.getItem("plat_override") ?? "null");
   } catch {}
   const current = override ? override.value : basePlat;
-  localStorage.setItem("plat_override", JSON.stringify({
-    value: current + amount,
-    ts: Date.now()
-  }));
-  window.dispatchEvent(new CustomEvent("plat:changed"));
+  setPlatOverride(current + amount);
 }

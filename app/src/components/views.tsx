@@ -1,13 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Flip, HistoryPoint, Relic, Sale } from "../types";
 import { BUCKET_LABEL, fetchLiveOrders, fmtP, pct, slugOf } from "../lib";
-import { CopyBtn, DataTable, MarketLink, Tag, Tile, VolBadge } from "./ui";
+import { CopyBtn, DataTable, MarketLink, Plat, PremiumLock, Tag, Tile, VolBadge } from "./ui";
 import type { Col } from "./ui";
 import { HistoryChart } from "./HistoryChart";
+import { PeakTimeChart } from "./PeakTime";
 import { openComposer } from "./Composer";
+import { isPremium, onAuthChange } from "../wfm";
+import {
+  Ban, Copy, ExternalLink, Fish, Flame, HandCoins, RefreshCw, Sprout, Target, Zap,
+} from "lucide-react";
 
 const Vault = ({ r }: { r: { vaulted: boolean } }) =>
   r.vaulted ? <Tag kind="vaulted" title="Vaulted: no longer drops in missions">V</Tag> : null;
+
+// deja margen fijo a la derecha del track para la etiqueta de valor (ver
+// "Top by radiant expected value" más abajo) — si la barra más larga llega
+// a 100% la etiqueta queda posicionada afuera del contenedor.
+const BAR_MAX_PCT = 82;
 
 // ---------- Resumen ----------
 
@@ -26,8 +36,8 @@ export function SummaryView({ relics, sales, history }: { relics: Relic[]; sales
     <>
       <div className="tiles">
         <Tile value={totRelics.toLocaleString()} label={`relics (${relics.length} types)`} />
-        <Tile value={`~${fmtP(evInt)}p`} label="expected value, all intact" />
-        <Tile value={`~${fmtP(evRad)}p`} label="expected value, all radiant" />
+        <Tile value={<>~<Plat value={evInt} /></>} label="expected value, all intact" />
+        <Tile value={<>~<Plat value={evRad} /></>} label="expected value, all radiant" />
         <Tile value={toRefine} label="relics worth refining" />
         <Tile value={vaulted} label="vaulted types" />
         <Tile value={`~${Math.round(ducats).toLocaleString()}`} label="expected ducats" />
@@ -42,10 +52,14 @@ export function SummaryView({ relics, sales, history }: { relics: Relic[]; sales
                title={`${r.relic}: intact ${fmtP(r.ev_intact)}p · radiant ${fmtP(r.ev_radiant)}p — rare: ${r.jackpot} (${fmtP(r.jackpot_price)}p)`}>
             <div className="bar-label">{r.relic} ×{r.count}</div>
             <div className="bar-track">
-              <div className="bar i" style={{ width: `${(r.ev_intact / maxEV) * 100}%` }} />
-              <div className="bar r" style={{ width: `${(r.ev_radiant / maxEV) * 100}%` }} />
-              <span className="bar-val" style={{ left: `calc(${(r.ev_radiant / maxEV) * 100}% + 6px)` }}>
-                {fmtP(r.ev_radiant)}p
+              {/* la barra más larga llega solo a BAR_MAX_PCT, no a 100% — deja
+                  margen fijo a la derecha para la etiqueta de valor, que si no
+                  queda posicionada afuera del contenedor (calc(100% + 6px))
+                  y se corta contra el borde de la tarjeta. */}
+              <div className="bar i" style={{ width: `${(r.ev_intact / maxEV) * BAR_MAX_PCT}%` }} />
+              <div className="bar r" style={{ width: `${(r.ev_radiant / maxEV) * BAR_MAX_PCT}%` }} />
+              <span className="bar-val" style={{ left: `calc(${(r.ev_radiant / maxEV) * BAR_MAX_PCT}% + 6px)` }}>
+                <Plat value={r.ev_radiant} />
               </span>
             </div>
           </div>
@@ -70,9 +84,9 @@ function QuickSales({ sales }: { sales: Sale[] }) {
               <tr key={i}>
                 <td className="muted">{s.ts?.slice(0, 10)}</td>
                 <td>{s.items}</td>
-                <td className="num">{s.plat}p</td>
+                <td className="num"><Plat value={s.plat} /></td>
                 <td className={`num ${diff >= 0 ? "gain-pos" : "loss"}`}>
-                  {diff >= 0 ? "+" : ""}{fmtP(diff)}p vs today
+                  <Plat value={diff} sign /> vs today
                 </td>
               </tr>
             );
@@ -84,6 +98,16 @@ function QuickSales({ sales }: { sales: Sale[] }) {
 }
 
 // ---------- Flips ----------
+
+/** Unidades por ventana de trade: los rankeados (arcanos/primed maxeados) y los
+ *  sets se mueven de a 1; solo los items sueltos de rango 0 valen en lote. */
+export const bulkQty = (f: { spread: number; rank?: number; kind?: string }): number => {
+  if ((f.rank ?? 0) > 0 || f.kind === "set" || f.spread <= 0) return 1;
+  return Math.min(6, Math.max(1, Math.ceil(15 / f.spread)));
+};
+/** Ganancia por par de trades (compra + venta). */
+export const perTradeProfit = (f: { spread: number; rank?: number; kind?: string }): number =>
+  f.spread * bulkQty(f);
 
 /** slug -> ordenes activas mias, desde el cache de My Orders */
 function myOrdersBySlug(): Record<string, { buy?: boolean; sell?: boolean }> {
@@ -98,13 +122,24 @@ function myOrdersBySlug(): Record<string, { buy?: boolean; sell?: boolean }> {
   } catch { return {}; }
 }
 
-export function FlipsView({ flips: flipsProp, flipsTs, startPlat }: { flips: Flip[]; flipsTs: number | null; startPlat: number }) {
+export function FlipsView({ flips: flipsProp, flipsTs, startPlat, preview }: {
+  flips: Flip[]; flipsTs: number | null; startPlat: number;
+  /** Vista pública sin cuenta conectada (landing): sin botones de postear
+   *  órdenes (necesitan login para hacer algo) y sin Suggested Positions
+   *  (premium, no tiene sentido venderlo antes de mostrar el resto). */
+  preview?: boolean;
+}) {
   const [term, setTerm] = useState("");
   const [liquidOnly, setLiquidOnly] = useState(true);
+  const [kind, setKind] = useState<"" | "set" | "arcane" | "mod">("");
+  const [minSpread, setMinSpread] = useState(15);
   const [flips, setFlips] = useState(flipsProp);
   const [live, setLive] = useState<"idle" | "running" | "done">("idle");
   const [liveProgress, setLiveProgress] = useState("");
+  const [lastLive, setLastLive] = useState<Date | null>(null);
   const [mine, setMine] = useState(myOrdersBySlug);
+  const [, forcePremium] = useState(0);
+  useEffect(() => onAuthChange(() => forcePremium(x => x + 1)), []);
 
   // marcar al instante cuando publicas desde el composer, y re-leer el cache
   useEffect(() => {
@@ -122,17 +157,28 @@ export function FlipsView({ flips: flipsProp, flipsTs, startPlat }: { flips: Fli
   }, []);
 
   const rows = useMemo(() => flips.filter(f =>
+    // sin las dos puntas reales no hay flip: eso es trabajo del sniper
+    f.buy > 0 && f.sell > 0 &&
     (!term || f.name.toLowerCase().includes(term.toLowerCase())) &&
-    (!liquidOnly || f.vol48 >= 30)), [flips, term, liquidOnly]);
+    (!liquidOnly || f.vol48 >= 30) &&
+    perTradeProfit(f) >= minSpread &&
+    (!kind || (f.kind ?? "set") === kind)), [flips, term, liquidOnly, kind, minSpread]);
 
   // qué sets ya tienen precio en vivo (para no re-pedirlos al cambiar filtros)
   const refreshedRef = useRef<Set<string>>(new Set());
   const busyRef = useRef(false);
+  // el intervalo lee esto en vez de `rows` directo: así siempre usa los
+  // filtros vigentes al momento del tick, no los de cuando arrancó el timer
+  const rowsRef = useRef(rows);
+  useEffect(() => { rowsRef.current = rows; }, [rows]);
 
   async function refreshLive(force = false) {
     if (busyRef.current) return; // ya hay una corrida en curso
-    const targets = [...rows]
-      .sort((a, b) => b.spread - a.spread)
+    // top 25 por score, no por spread crudo — así el refresco en vivo
+    // mantiene fresco lo que de verdad conviene flipear, no lo que da la
+    // casualidad de tener el spread más grande (que puede ser ilíquido)
+    const targets = [...rowsRef.current]
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
       .filter(f => force || !refreshedRef.current.has(f.slug))
       .slice(0, 25);
     if (!targets.length) { setLive("done"); return; }
@@ -142,11 +188,18 @@ export function FlipsView({ flips: flipsProp, flipsTs, startPlat }: { flips: Fli
       for (let i = 0; i < targets.length; i++) {
         setLiveProgress(`${i + 1}/${targets.length}`);
         try {
-          const o = await fetchLiveOrders(targets[i].slug);
-          if (o) {
+          const o = await fetchLiveOrders(targets[i].slug, targets[i].rank ?? 0);
+          // Solo pisamos el dato si el refresco trajo las DOS puntas reales
+          // Y siguen cruzadas bien (sell > buy) — si no, dejamos el valor
+          // del último escaneo tal cual. Sin el chequeo de sell > buy, el
+          // mercado moviéndose podía dejar una fila con precios cruzados
+          // (comprador pagando más que el vendedor pide en ese instante) y
+          // encima con el "score" viejo todavía alto, aparecía como "top
+          // pick" mostrando un spread negativo.
+          if (o && o.buy > 0 && o.sell > 0 && o.sell > o.buy) {
             setFlips(prev => prev.map(f => f.slug === targets[i].slug
               ? { ...f, buy: o.buy, sell: o.sell, spread: o.sell - o.buy,
-                  margin: o.sell > 0 ? ((o.sell - o.buy) / o.sell) * 100 : 0,
+                  margin: ((o.sell - o.buy) / o.sell) * 100,
                   parts_profit: f.parts_total != null ? o.sell - f.parts_total : f.parts_profit,
                   fresh: true }
               : f));
@@ -157,23 +210,21 @@ export function FlipsView({ flips: flipsProp, flipsTs, startPlat }: { flips: Fli
     } finally {
       busyRef.current = false;
       setLive("done");
+      setLastLive(new Date());
     }
   }
 
-  // al abrir la pestaña y al cambiar el filtro de liquidez, refrescar
-  // los visibles que todavía no tienen precio en vivo
+  // Auto-refresco liviano: al montar y cada 90s, re-cotiza en vivo el top 25
+  // por spread (unos 20 requests, ~8s a nuestro rate limit). Como el refresco
+  // ahora es no-destructivo (nunca pisa un dato bueno con 0), no hay riesgo
+  // de que una fila desaparezca — solo se pone más al día sola.
   useEffect(() => {
-    if (flipsProp.length) refreshLive();
+    if (!flipsProp.length) return;
+    refreshLive();
+    const id = setInterval(() => refreshLive(true), 90_000);
+    return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liquidOnly]);
-
-  // al buscar, refrescar lo que matchea (debounce para no pedir por tecla)
-  useEffect(() => {
-    if (!term) return;
-    const t = setTimeout(() => refreshLive(), 500);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [term]);
+  }, [flipsProp.length]);
 
   const cols: Col<Flip>[] = [
     {
@@ -181,64 +232,84 @@ export function FlipsView({ flips: flipsProp, flipsTs, startPlat }: { flips: Fli
       render: f => (
         <>
           <MarketLink slug={f.slug}>{f.name}</MarketLink>
-          {mine[f.slug]?.buy && <> <Tag kind="wtb" title="You already have a buy order for this set">WTB ✓</Tag></>}
-          {mine[f.slug]?.sell && <> <Tag kind="wts" title="You already have a sell order for this set">WTS ✓</Tag></>}
+          {f.kind === "arcane" && <> <Tag title={`Arcane — trading rank ${f.rank ?? 0}`}>arcane{f.rank ? ` r${f.rank}` : ""}</Tag></>}
+          {f.kind === "mod" && <> <Tag title={`Mod — trading rank ${f.rank ?? 0}`}>{f.rank ? `r${f.rank}` : "unranked"}</Tag></>}
+          {mine[f.slug]?.buy && <> <Tag kind="wtb" title="You already have a buy order for this item">WTB ✓</Tag></>}
+          {mine[f.slug]?.sell && <> <Tag kind="wts" title="You already have a sell order for this item">WTS ✓</Tag></>}
         </>
       ),
     },
     {
       key: "buy", label: "Buyers pay (WTB)", num: true,
       title: "Highest in-game buy order", sortVal: f => f.buy,
-      render: f => f.fresh ? `${fmtP(f.buy)}p`
-        : <span className="stale" title="Stale scan value — refreshing…">{fmtP(f.buy)}p ⏳</span>,
+      render: f => <Plat value={f.buy} />,
     },
     {
       key: "sell", label: "Sellers ask (WTS)", num: true,
-      title: "Cheapest in-game sell", sortVal: f => f.sell,
-      render: f => f.fresh ? `${fmtP(f.sell)}p`
-        : <span className="stale" title="Stale scan value — refreshing…">{fmtP(f.sell)}p ⏳</span>,
+      title: "Cheapest in-game sell at this item's trading rank", sortVal: f => f.sell,
+      render: f => <Plat value={f.sell} />,
     },
-    { key: "spread", label: "Spread", num: true, sortVal: f => f.spread, render: f => <b>{fmtP(f.spread)}p</b> },
+    {
+      key: "perTrade", label: "Profit", num: true,
+      title: "What you make per flip (× units when a cheap item is worth moving in bulk)",
+      sortVal: f => perTradeProfit(f),
+      render: f => {
+        const q = bulkQty(f);
+        return <><b className="gain-pos"><Plat value={perTradeProfit(f)} /></b>{q > 1 && <span className="muted"> ×{q}</span>}</>;
+      },
+    },
     { key: "margin", label: "Margin", num: true, sortVal: f => f.margin, render: f => `${f.margin.toFixed(0)}%` },
     { key: "vol48", label: "Sales 48h", num: true, sortVal: f => f.vol48, render: f => <VolBadge vol={f.vol48} /> },
-    { key: "med48", label: "Med 48h", num: true, sortVal: f => f.med48, render: f => `${fmtP(f.med48)}p` },
     {
-      key: "parts", label: "Parts→set", num: true, title: "Buy the listed parts, sell the set",
+      key: "score", label: "Score", num: true,
+      title: "spread^1.4 × liquidity confidence^1.6 × margin confidence — low profit and low recent sales both get punished harder than proportionally, not just discounted a bit",
+      sortVal: f => f.score ?? 0, render: f => <b>{(f.score ?? 0).toFixed(1)}</b>,
+    },
+    {
+      key: "parts", label: "Separate parts", num: true,
+      title: "Buy the listed parts (at asking price, no waiting), sell the assembled set — usually worse than the Profit column, which assumes both your own buy and sell orders get filled",
       sortVal: f => f.parts_profit ?? -999,
       render: f => f.parts_profit != null
-        ? <span className={f.parts_profit > 0 ? "gain-pos" : ""} title={f.parts_detail}>
-            {f.parts_profit > 0 ? "+" : ""}{fmtP(f.parts_profit)}p
+        ? <span className={f.parts_profit >= perTradeProfit(f) ? "gain-pos" : "loss"} title={f.parts_detail}>
+            <Plat value={f.parts_profit} />
           </span>
         : <span className="muted">—</span>,
     },
-    {
+    ...(preview ? [] : [{
       key: "actions", label: "Actions",
-      render: f => (
+      render: (f: Flip) => (
         <span className="actions">
           <button className="btn primary" title="Post a buy order from here"
-                  onClick={() => openComposer({ slug: f.slug, name: f.name, type: "buy", price: Math.round(f.buy + 1) })}>
-            ⚡ WTB
+                  onClick={() => openComposer({ slug: f.slug, name: f.name, type: "buy", price: Math.round(f.buy + 1), rank: f.rank || undefined, refBuy: f.buy, refSell: f.sell })}>
+            <Zap size={12} className="inline-icon" /> WTB
           </button>
           <button className="btn primary" title="Post a sell order from here"
-                  onClick={() => openComposer({ slug: f.slug, name: f.name, type: "sell", price: Math.round(f.sell - 1) })}>
-            ⚡ WTS
+                  onClick={() => openComposer({ slug: f.slug, name: f.name, type: "sell", price: Math.round(f.sell - 1), rank: f.rank || undefined, refBuy: f.buy, refSell: f.sell })}>
+            <Zap size={12} className="inline-icon" /> WTS
           </button>
-          <CopyBtn label="📋" text={`WTB [${f.name}] ${Math.round(f.buy + 1)}p`} />
-          <a className="btn" target="_blank" rel="noreferrer" href={`https://warframe.market/items/${f.slug}`}>↗</a>
         </span>
       ),
-    },
+    } satisfies Col<Flip>]),
   ];
 
-  const liquid = flips.filter(f => f.vol48 >= 30);
+  // los picks salen de filas con las DOS puntas reales Y spread positivo:
+  // sin comprador in-game el "spread" contra 0 daba números absurdos (buy
+  // 1p → resell 129p), y el mercado moviéndose entre escaneos puede cruzar
+  // los precios (comprador pagando más de lo que pide el vendedor en ese
+  // instante) — sin el chequeo de sell > buy, el "top pick" podía mostrar
+  // un spread negativo.
+  const liquid = flips.filter(f => f.vol48 >= 30 && f.buy > 0 && f.sell > f.buy);
   const bestParts = [...liquid].filter(f => (f.parts_profit ?? 0) > 0)
     .sort((a, b) => (b.parts_profit ?? 0) - (a.parts_profit ?? 0))[0];
-  const bestSpread = [...liquid].sort((a, b) => b.spread - a.spread)[0];
+  // por score, no por spread crudo — si no, un arcano caro y poco líquido
+  // le ganaba a algo con menos plata por flip pero de verdad ejecutable
+  const bestSpread = [...liquid].sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
 
   return (
     <>
     <div className="card">
-      <h2>Daily flips — Prime sets</h2>
+      <h2>Daily flips — Prime sets, arcanes & primed mods</h2>
+      <PeakTimeChart />
       <p className="hint">
         <b>Spread</b>: post a buy order 1p above buyers, resell 1p under sellers (bigger margin, needs a fill).{" "}
         <b>Parts→set</b>: buy the listed parts, sell the set (instant profit — hover for breakdown).
@@ -246,35 +317,40 @@ export function FlipsView({ flips: flipsProp, flipsTs, startPlat }: { flips: Fli
       </p>
       <div className="controls">
         <button className="btn" disabled={live === "running"} onClick={() => refreshLive(true)}>
-          {live === "running" ? `🔄 updating ${liveProgress}…`
-            : live === "done" ? "✓ live prices — refresh again"
-            : "🔄 refresh live prices (top 25)"}
+          <RefreshCw size={12} className={`inline-icon ${live === "running" ? "spin" : ""}`} />{" "}
+          {live === "running" ? `updating ${liveProgress}…`
+            : live === "done" ? "live prices — refresh again"
+            : "refresh live prices (top 25)"}
         </button>
-        {live === "done" && <span className="hint" style={{ margin: 0 }}>buy/sell/spread are live; volume & median still from the scan</span>}
+        {live === "done" && lastLive && (
+          <span className="hint" style={{ margin: 0 }}>
+            top 25 live as of {lastLive.toLocaleTimeString()} · auto-refreshes every 90s
+          </span>
+        )}
       </div>
       {(bestParts || bestSpread) && (
         <div className="picks">
           {bestParts && (
             <div className="pick">
-              <div className="pick-k">⚡ Instant profit</div>
+              <div className="pick-k"><Zap size={12} className="inline-icon" /> Instant profit</div>
               <div className="pick-v"><MarketLink slug={bestParts.slug}>{bestParts.name}</MarketLink></div>
               <div className="pick-d">
-                buy parts for {fmtP(bestParts.parts_total!)}p, sell the set at {fmtP(bestParts.sell)}p{" "}
-                → <b className="gain-pos">+{fmtP(bestParts.parts_profit!)}p</b>
+                buy parts for <Plat value={bestParts.parts_total!} />, sell the set at <Plat value={bestParts.sell} />{" "}
+                → <b className="gain-pos"><Plat value={bestParts.parts_profit!} sign /></b>
               </div>
               <div className="pick-d muted" title={bestParts.parts_detail}>{bestParts.parts_detail}</div>
             </div>
           )}
           {bestSpread && (
             <div className="pick">
-              <div className="pick-k">🎣 Best spread (patient)</div>
+              <div className="pick-k"><Fish size={12} className="inline-icon" /> Top pick (patient)</div>
               <div className="pick-v"><MarketLink slug={bestSpread.slug}>{bestSpread.name}</MarketLink></div>
               <div className="pick-d">
-                buy order at {Math.round(bestSpread.buy + 1)}p, resell at {Math.round(bestSpread.sell - 1)}p{" "}
-                → <b className="gain-pos">+{fmtP(bestSpread.spread - 2)}p</b> · {bestSpread.vol48} sales/48h
+                buy order at <Plat value={bestSpread.buy + 1} />, resell at <Plat value={bestSpread.sell - 1} />{" "}
+                → <b className="gain-pos"><Plat value={bestSpread.spread - 2} sign /></b> · {bestSpread.vol48} sales/48h
               </div>
               <div className="pick-d">
-                <CopyBtn label="📋 copy WTB" text={`WTB [${bestSpread.name}] ${Math.round(bestSpread.buy + 1)}p`} />
+                <CopyBtn label={<><Copy size={12} className="inline-icon" /> copy WTB</>} text={`WTB [${bestSpread.name}] ${Math.round(bestSpread.buy + 1)}p (via NinjaFlip)`} />
               </div>
             </div>
           )}
@@ -286,11 +362,21 @@ export function FlipsView({ flips: flipsProp, flipsTs, startPlat }: { flips: Fli
           <input type="checkbox" checked={liquidOnly} onChange={e => setLiquidOnly(e.target.checked)} />
           liquid only (≥30 sales/48h)
         </label>
+        <label className="sim-field" title="Minimum profit per pair of trades (spread × bulk units)">min profit/trade
+          <input type="number" min={0} value={minSpread}
+                 onChange={e => setMinSpread(+e.target.value || 0)} /> p
+        </label>
+        <span className="chips">
+          {([["", "All"], ["set", "Prime sets"], ["arcane", "Arcanes"], ["mod", "Primed mods"]] as const).map(([k, label]) => (
+            <button key={k} className={`chip ${kind === k ? "active" : ""}`} onClick={() => setKind(k)}>{label}</button>
+          ))}
+        </span>
       </div>
-      <DataTable cols={cols} rows={rows} defaultSort="spread" maxRows={20} />
+      <DataTable cols={cols} rows={rows} defaultSort="score" maxRows={20} />
     </div>
-    <SuggesterCard flips={flips} mine={mine} startPlat={startPlat} />
-    <SimulatorCard flips={flips} startPlat={startPlat} />
+    {!preview && (isPremium()
+      ? <SuggesterCard flips={flips} mine={mine} startPlat={startPlat} />
+      : <div className="card"><PremiumLock feature="Suggested Positions" /></div>)}
     </>
   );
 }
@@ -311,24 +397,36 @@ function SuggesterCard({ flips, mine, startPlat }: {
     } catch { return 0; }
   }, [mine]);
 
-  const [capital, setCapital] = useState(() => Math.max(0, Math.round(startPlat - committed)));
+  // capital libre = lo que tenés ahora mismo menos lo ya comprometido en
+  // compras activas. Sigue el valor en vivo (se resetea si vendés/comprás
+  // algo o el plat cambia) — editable a mano mientras tanto para ese caso.
+  const autoCapital = Math.max(0, Math.round(startPlat - committed));
+  const [capital, setCapital] = useState(autoCapital);
+  useEffect(() => { setCapital(autoCapital); }, [autoCapital]);
   const [tradesLeft, setTradesLeft] = useState(14);
 
   const plan = useMemo(() => {
     const slots = Math.max(0, Math.floor(tradesLeft / 2));
+    // mismo "score" que la columna de la tabla y el CLI de flips.py (spread ×
+    // confianza(liquidez) × confianza(margen)) — una sola fórmula, no una copia local
     const cands = flips
-      .filter(f => f.fresh && f.vol48 >= 30 && f.spread >= 6 &&
+      .filter(f => f.buy > 0 && f.vol48 >= 30 && f.margin >= 12 && perTradeProfit(f) >= 15 &&
                    !mine[f.slug]?.buy && !mine[f.slug]?.sell)
-      .sort((a, b) => b.spread * Math.min(b.vol48, 60) - a.spread * Math.min(a.vol48, 60));
-    const picks: { f: Flip; cost: number; resell: number; profit: number }[] = [];
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    const picks: { f: Flip; cost: number; resell: number; qty: number; profit: number }[] = [];
     let cap = capital;
     for (const f of cands) {
       if (picks.length >= slots) break;
       const cost = Math.round(f.buy + 1);
       const resell = Math.max(1, Math.round(f.sell - 1));
-      if (cost > cap || resell - cost < 5) continue;
-      picks.push({ f, cost, resell, profit: resell - cost });
-      cap -= cost;
+      const unit = resell - cost;
+      if (unit < 1 || cost > cap) continue;
+      // rankeados y sets: de a 1; sueltos de rango 0: lote hasta 6
+      const want = bulkQty(f);
+      const qty = Math.max(1, Math.min(want, Math.floor(cap / cost)));
+      if (unit * qty < 5) continue; // no vale gastar 2 trades
+      picks.push({ f, cost, resell, qty, profit: unit * qty });
+      cap -= cost * qty;
     }
     return { picks, capLeft: cap };
   }, [flips, mine, capital, tradesLeft]);
@@ -338,13 +436,14 @@ function SuggesterCard({ flips, mine, startPlat }: {
 
   return (
     <div className="card">
-      <h2>🎯 Suggested positions</h2>
+      <h2><Target size={16} /> Suggested positions</h2>
       <p className="hint">
-        Live flips you have no order on, ranked by spread × liquidity, greedily fit to your free
+        Live flips you have no order on, ranked by score (spread, discounted by how sure you can buy and resell it), greedily fit to your free
         capital and remaining trades (2 per flip). Skips profits under 5p. Posting one updates the plan.
       </p>
       <div className="controls">
-        <label className="sim-field">Free capital
+        <label className="sim-field" title="Your current plat minus what's already tied up in active buy orders — edit to override">
+          Free capital
           <input type="number" min={0} value={capital} onChange={e => setCapital(+e.target.value || 0)} /> p
         </label>
         <label className="sim-field" title="Each flip uses 2 of your daily trades (MR = trades/day)">
@@ -352,24 +451,29 @@ function SuggesterCard({ flips, mine, startPlat }: {
           <input type="number" min={0} max={40} value={tradesLeft} onChange={e => setTradesLeft(+e.target.value || 0)} />
         </label>
         <span className="hint" style={{ margin: 0 }}>
-          committed in buys: {fmtP(committed)}p{plan.picks.length > 0 && <> · plan uses {fmtP(totCost)}p, leaves {fmtP(plan.capLeft)}p free</>}
+          committed in buys: <Plat value={committed} />
+          {plan.picks.length > 0 && <> · plan uses <Plat value={totCost} />, leaves <Plat value={plan.capLeft} /> free</>}
         </span>
       </div>
       {plan.picks.length ? (
         <>
           <table>
             <tbody>
-              {plan.picks.map(({ f, cost, resell, profit }) => (
+              {plan.picks.map(({ f, cost, resell, qty, profit }) => (
                 <tr key={f.slug}>
-                  <td><MarketLink slug={f.slug}>{f.name}</MarketLink></td>
-                  <td className="num">post WTB <b>{cost}p</b></td>
-                  <td className="num">resell ~{resell}p</td>
-                  <td className="num gain-pos">+{profit}p</td>
+                  <td>
+                    <MarketLink slug={f.slug}>{f.name}</MarketLink>
+                    {f.kind === "arcane" && <> <Tag>arcane</Tag></>}
+                    {f.kind === "mod" && <> <Tag>primed</Tag></>}
+                  </td>
+                  <td className="num">post WTB <b><Plat value={cost} /></b>{qty > 1 && <> ×{qty}</>}</td>
+                  <td className="num">resell ~<Plat value={resell} /></td>
+                  <td className="num gain-pos"><Plat value={profit} sign /></td>
                   <td className="num">{f.vol48} sales/48h</td>
                   <td>
                     <button className="btn primary"
-                            onClick={() => openComposer({ slug: f.slug, name: f.name, type: "buy", price: cost })}>
-                      ⚡ post
+                            onClick={() => openComposer({ slug: f.slug, name: f.name, type: "buy", price: cost, quantity: qty, rank: f.rank || undefined, refBuy: f.buy, refSell: f.sell })}>
+                      <Zap size={12} className="inline-icon" /> post
                     </button>
                   </td>
                 </tr>
@@ -377,143 +481,13 @@ function SuggesterCard({ flips, mine, startPlat }: {
             </tbody>
           </table>
           <p className="hint" style={{ marginTop: 8 }}>
-            Full plan: {plan.picks.length} position{plan.picks.length > 1 ? "s" : ""} · {fmtP(totCost)}p in ·
-            expected <b className="gain-pos">+{fmtP(totProfit)}p</b> when they cycle.
+            Full plan: {plan.picks.length} position{plan.picks.length > 1 ? "s" : ""} · <Plat value={totCost} /> in ·
+            expected <b className="gain-pos"><Plat value={totProfit} sign /></b> when they cycle.
           </p>
         </>
       ) : (
-        <p className="muted">Nothing to suggest — either no free capital/trades, or live prices are still loading (⏳).</p>
+        <p className="muted">Nothing to suggest with the current capital/trades — try lowering them, or rescan with <code>python scripts/flips.py</code>.</p>
       )}
-    </div>
-  );
-}
-
-// ---------- Simulador ----------
-
-interface SimDay {
-  day: number;
-  capital: number;
-  profit: number;
-  positions: { name: string; cost: number; eff: number }[];
-}
-
-function simulateDays(flips: Flip[], startCapital: number, tighten: number,
-                      rotations: number, mr: number, days: number): SimDay[] {
-  const usable = flips
-    .filter(f => f.vol48 >= 30)
-    .map(f => ({ name: f.name, cost: Math.round(f.buy + tighten * 0.4), eff: f.spread - tighten }))
-    .filter(f => f.eff >= 3)
-    .sort((a, b) => b.eff - a.eff);
-  const maxCycles = Math.floor(mr / 2) * rotations;
-
-  const out: SimDay[] = [];
-  let capital = startCapital;
-  for (let day = 1; day <= days; day++) {
-    let cap = capital;
-    const positions: SimDay["positions"] = [];
-    const perSet = new Map<string, number>();
-    // greedy: mejor margen primero, máx 2 unidades por set por día
-    while (positions.length < maxCycles) {
-      const pick = usable.find(f => f.cost <= cap && (perSet.get(f.name) ?? 0) < 2);
-      if (!pick) break;
-      positions.push(pick);
-      perSet.set(pick.name, (perSet.get(pick.name) ?? 0) + 1);
-      cap -= pick.cost; // el capital queda invertido hasta que rota
-    }
-    const profit = positions.reduce((a, p) => a + p.eff, 0) * rotations;
-    out.push({ day, capital, profit, positions });
-    capital += profit;
-  }
-  return out;
-}
-
-function SimulatorCard({ flips, startPlat }: { flips: Flip[]; startPlat: number }) {
-  const [capital, setCapital] = useState(startPlat || 95);
-  const [tighten, setTighten] = useState(8);
-  const [rotations, setRotations] = useState(1);
-  const [mr, setMr] = useState(22);
-
-  const sim = useMemo(
-    () => simulateDays(flips, capital, tighten, rotations, mr, 7),
-    [flips, capital, tighten, rotations, mr]);
-
-  const d1 = sim[0];
-  if (!d1) return null;
-  const avgMargin = d1.positions.length ? d1.profit / rotations / d1.positions.length : 0;
-  const avgSale = d1.positions.length
-    ? d1.positions.reduce((a, p) => a + p.cost + p.eff, 0) / d1.positions.length : 0;
-
-  return (
-    <div className="card">
-      <h2>🧮 Simulator: end-of-day plat</h2>
-      <p className="hint">
-        Builds a greedy portfolio from the liquid flips your capital affords (max 2 per set),
-        trading margin for speed. Assumes every order fills within the day
-        — reasonable at 1 cycle/day, optimistic at 2. Credit tax and price wars not included.
-      </p>
-      <div className="controls">
-        <label className="sim-field">Starting capital
-          <input type="number" min={10} value={capital} onChange={e => setCapital(+e.target.value || 0)} /> p
-        </label>
-        <label className="sim-field" title="Spread you give up to be top bidder and cheapest seller (e.g. buy +3, sell -5)">
-          Margin given up
-          <input type="number" min={0} max={20} value={tighten} onChange={e => setTighten(+e.target.value || 0)} /> p
-        </label>
-        <label className="sim-field" title="How many times each position cycles per day">Cycles/day
-          <select value={rotations} onChange={e => setRotations(+e.target.value)}>
-            <option value={1}>1 (realistic)</option>
-            <option value={2}>2 (optimistic)</option>
-          </select>
-        </label>
-        <label className="sim-field" title="Daily trade limit = your Mastery Rank">MR
-          <input type="number" min={2} max={40} value={mr} onChange={e => setMr(+e.target.value || 2)} />
-        </label>
-      </div>
-
-      <div className="tiles">
-        <Tile value={<span className="gain-pos">{Math.round(d1.capital + d1.profit)}p</span>}
-              label={`end of day 1 (starting with ${capital}p)`} />
-        <Tile value={`+${Math.round(d1.profit)}p`} label="day-1 profit" />
-        <Tile value={`${avgMargin.toFixed(1)}p`} label="avg margin per flip" />
-        <Tile value={`${avgSale.toFixed(0)}p`} label="avg sale price" />
-        <Tile value={`${d1.positions.length * rotations} de ${Math.floor(mr / 2) * rotations}`} label="flips run / possible" />
-      </div>
-
-      <div className="two-col">
-        <div>
-          <h3 className="sim-h3">Day-1 portfolio</h3>
-          <table>
-            <tbody>
-              {d1.positions.map((p, i) => (
-                <tr key={i}>
-                  <td>{p.name}</td>
-                  <td className="num">buy ~{p.cost}p</td>
-                  <td className="num">sell ~{p.cost + p.eff}p</td>
-                  <td className="num gain-pos">+{p.eff.toFixed(0)}p</td>
-                </tr>
-              ))}
-              {!d1.positions.length && (
-                <tr><td className="muted">Not enough capital for any liquid flip — lower the margin given up or save more plat.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-        <div>
-          <h3 className="sim-h3">Week, reinvesting everything</h3>
-          <table>
-            <tbody>
-              {sim.map(d => (
-                <tr key={d.day}>
-                  <td>Day {d.day}</td>
-                  <td className="num">{Math.round(d.capital)}p</td>
-                  <td className="num gain-pos">+{Math.round(d.profit)}p</td>
-                  <td className="num"><b>{Math.round(d.capital + d.profit)}p</b></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   );
 }
@@ -526,24 +500,24 @@ export function HuntView({ relics }: { relics: Relic[] }) {
   const base: Col<Relic>[] = [
     { key: "relic", label: "Relic", sortVal: r => r.relic, render: r => <>{r.relic} <Vault r={r} /></> },
     { key: "count", label: "Owned", num: true, sortVal: r => r.count, render: r => r.count },
-    { key: "jackpot", label: "Top item", sortVal: r => r.jackpot, render: r => <MarketLink name={r.jackpot} /> },
-    { key: "price", label: "Price", num: true, sortVal: r => r.jackpot_price, render: r => `${fmtP(r.jackpot_price)}p` },
+    { key: "jackpot", label: "Top item", sortVal: r => r.jackpot, render: r => <span className="nowrap-cell"><MarketLink name={r.jackpot} /></span> },
+    { key: "price", label: "Price", num: true, sortVal: r => r.jackpot_price, render: r => <Plat value={r.jackpot_price} /> },
     { key: "vol", label: "Sales 48h", num: true, sortVal: r => r.jackpot_vol48, render: r => <VolBadge vol={r.jackpot_vol48} /> },
   ];
 
   const intCols: Col<Relic>[] = [...base,
     { key: "hit", label: "P(hit)", num: true, sortVal: r => r.hunt!.hitInt, render: r => pct(r.hunt!.hitInt) },
-    { key: "score", label: "Exp. plat", num: true, sortVal: r => r.hunt!.scoreInt, render: r => <b>{fmtP(r.hunt!.scoreInt)}p</b> },
+    { key: "score", label: "Exp. plat", num: true, sortVal: r => r.hunt!.scoreInt, render: r => <b><Plat value={r.hunt!.scoreInt} /></b> },
   ];
 
   const radCols: Col<Relic>[] = [...base,
     { key: "hit", label: "P(hit)", num: true, sortVal: r => r.hunt!.hitRadshare, render: r => pct(r.hunt!.hitRadshare) },
-    { key: "score", label: "Exp. plat", num: true, sortVal: r => r.hunt!.scoreRad, render: r => <b>{fmtP(r.hunt!.scoreRad)}p</b> },
+    { key: "score", label: "Exp. plat", num: true, sortVal: r => r.hunt!.scoreRad, render: r => <b><Plat value={r.hunt!.scoreRad} /></b> },
     {
       key: "missing", label: "Need for 95%", num: true, sortVal: r => r.hunt!.missing,
       render: r => r.hunt!.missing === 0 ? "✓ enough"
-        : r.vaulted ? <span title="Vaulted, no more drops">~{r.hunt!.missing} ⛔</span>
-        : <span title={r.farm ?? ""}>~{r.hunt!.missing} 🌱</span>,
+        : r.vaulted ? <span title="Vaulted, no more drops">~{r.hunt!.missing} <Ban size={11} className="inline-icon" /></span>
+        : <span title={r.farm ?? ""}>~{r.hunt!.missing} <Sprout size={11} className="inline-icon" /></span>,
     },
   ];
 
@@ -553,7 +527,7 @@ export function HuntView({ relics }: { relics: Relic[] }) {
         Real odds of pulling the priciest item <b>with your stock</b>. "Exp. plat" = price × P(hit).
         To ~guarantee (95%) a rare: ~149 intact or ~8 radshares (each radshare crack = 4 rolls).
       </p>
-      <div className="two-col">
+      <div className="two-col hunt-cols">
         <div className="card">
           <h2>Opening INTACT</h2>
           <DataTable cols={intCols} rows={hunts} defaultSort="score" maxRows={15} />
@@ -586,7 +560,7 @@ function RadiantReadyCard({ relics }: { relics: Relic[] }) {
       render: r => <b>{r.radiantCount}</b>,
     },
     { key: "jackpot", label: "Priciest rare", sortVal: r => r.jackpot, render: r => <MarketLink name={r.jackpot} /> },
-    { key: "price", label: "Price", num: true, sortVal: r => r.jackpot_price, render: r => `${fmtP(r.jackpot_price)}p` },
+    { key: "price", label: "Price", num: true, sortVal: r => r.jackpot_price, render: r => <Plat value={r.jackpot_price} /> },
     { key: "vol", label: "Sales 48h", num: true, sortVal: r => r.jackpot_vol48, render: r => <VolBadge vol={r.jackpot_vol48} /> },
     {
       key: "hit", label: "P(hit) in radshare", num: true,
@@ -596,13 +570,13 @@ function RadiantReadyCard({ relics }: { relics: Relic[] }) {
     {
       key: "score", label: "Exp. plat ▾", num: true,
       title: "Rare price × odds with your radiants",
-      sortVal: r => r.scoreRad, render: r => <b>{fmtP(r.scoreRad)}p</b>,
+      sortVal: r => r.scoreRad, render: r => <b><Plat value={r.scoreRad} /></b>,
     },
   ];
 
   return (
     <div className="card">
-      <h2>🔆 Radiants ready to crack
+      <h2><Flame size={16} /> Radiants ready to crack
         <Tag kind="radiant">{ready.reduce((a, r) => a + r.radiantCount, 0)} radiants across {ready.length} types</Tag>
       </h2>
       <p className="hint">
@@ -646,18 +620,18 @@ export function RelicsView({ relics }: { relics: Relic[] }) {
       ),
     },
     { key: "count", label: "Owned", num: true, sortVal: r => r.count, render: r => r.count },
-    { key: "evi", label: "Intact EV", num: true, sortVal: r => r.ev_intact, render: r => fmtP(r.ev_intact) },
-    { key: "evr", label: "Radiant EV", num: true, sortVal: r => r.ev_radiant, render: r => fmtP(r.ev_radiant) },
+    { key: "evi", label: "Intact EV", num: true, sortVal: r => r.ev_intact, render: r => <Plat value={r.ev_intact} /> },
+    { key: "evr", label: "Radiant EV", num: true, sortVal: r => r.ev_radiant, render: r => <Plat value={r.ev_radiant} /> },
     {
       key: "gain", label: "Refine gain", num: true, sortVal: r => r.gain,
-      render: r => <span className={r.gain >= 2.5 ? "gain-pos" : ""}>+{fmtP(r.gain)}</span>,
+      render: r => <span className={r.gain >= 2.5 ? "gain-pos" : ""}><Plat value={r.gain} sign /></span>,
     },
-    { key: "jp", label: "Top item", num: true, sortVal: r => r.jackpot_price, render: r => `${fmtP(r.jackpot_price)}p` },
+    { key: "jp", label: "Top item", num: true, sortVal: r => r.jackpot_price, render: r => <Plat value={r.jackpot_price} /> },
     {
       key: "bucket", label: "Recommendation", sortVal: r => r.bucket,
       render: r => (
         <Tag kind={r.bucket === "junk" ? "" : r.bucket}>
-          {BUCKET_LABEL[r.bucket]}{r.bucket === "sell" ? ` ~${fmtP(r.relic_price)}p` : ""}
+          {BUCKET_LABEL[r.bucket]}{r.bucket === "sell" && <> ~<Plat value={r.relic_price} /></>}
         </Tag>
       ),
     },
@@ -706,11 +680,11 @@ function RelicDetail({ r }: { r: Relic }) {
       <div className="detail-info">
         <b>{r.relic}</b>{" — "}
         {r.vaulted
-          ? <>⛔ vaulted, no longer drops</>
-          : <>🌱 farm: {r.farm ?? "?"} ({r.farm_chance ?? "?"}%)</>}
+          ? <><Ban size={13} className="inline-icon" /> vaulted, no longer drops</>
+          : <><Sprout size={13} className="inline-icon" /> farm: {r.farm ?? "?"} ({r.farm_chance ?? "?"}%)</>}
         {r.relic_price > 0 && (
-          <> · 💰 whole relic lists at ~{fmtP(r.relic_price)}p —{" "}
-            <MarketLink slug={slugOf(`${r.relic} relic`)}>see buyers ↗</MarketLink></>
+          <> · <HandCoins size={13} className="inline-icon" /> whole relic lists at ~<Plat value={r.relic_price} /> —{" "}
+            <MarketLink slug={slugOf(`${r.relic} relic`)}>see buyers <ExternalLink size={11} className="inline-icon" /></MarketLink></>
         )}
       </div>
       <table>
@@ -729,8 +703,8 @@ function RelicDetail({ r }: { r: Relic }) {
               <td>{d.rarity}</td>
               <td className="num">{d.chance_intact}%</td>
               <td className="num">{d.chance_radiant}%</td>
-              <td className="num">{d.price ? `${fmtP(d.price)}p` : "—"}</td>
-              <td className="num">{d.med48 ? `${fmtP(d.med48)}p` : "—"}</td>
+              <td className="num">{d.price ? <Plat value={d.price} /> : "—"}</td>
+              <td className="num">{d.med48 ? <Plat value={d.med48} /> : "—"}</td>
               <td className="num">{d.vol48}</td>
               <td className="num">{d.ducats || "—"}</td>
             </tr>
@@ -761,27 +735,3 @@ export function DucatsView({ relics }: { relics: Relic[] }) {
   );
 }
 
-// ---------- Ventas ----------
-
-export function SalesView({ sales }: { sales: Sale[] }) {
-  const cols: Col<Sale>[] = [
-    { key: "ts", label: "Date", sortVal: s => s.ts ?? "", render: s => s.ts?.slice(0, 10) },
-    { key: "items", label: "Sold", render: s => <span className="wrap-cell">{s.items}{s.partial ? " *" : ""}</span> },
-    { key: "plat", label: "You got", num: true, sortVal: s => s.plat, render: s => `${s.plat}p` },
-    { key: "now", label: "Worth today", num: true, sortVal: s => s.market_now, render: s => `${fmtP(s.market_now)}p` },
-    {
-      key: "diff", label: "Diff", num: true, sortVal: s => s.plat - s.market_now,
-      render: s => {
-        const d = s.plat - s.market_now;
-        return <span className={d >= 0 ? "gain-pos" : "loss"}>{d >= 0 ? "+" : ""}{fmtP(d)}p</span>;
-      },
-    },
-  ];
-  return (
-    <div className="card">
-      <h2>Your sales vs current market</h2>
-      <p className="hint">Plat sales from your history vs <b>today’s</b> price (not the trade-day price). Red = worth much more today than you got.</p>
-      <DataTable cols={cols} rows={sales} defaultSort="ts" maxRows={25} />
-    </div>
-  );
-}

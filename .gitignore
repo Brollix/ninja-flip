@@ -1,4 +1,5 @@
 .env
+.env.*
 __pycache__/
 *.pyc
 .venv/
@@ -6,3 +7,28 @@ cache/
 report.html
 report_data.js
 ledger.db
+
+# node
+node_modules/
+dist/
+npm-debug.log*
+*.tsbuildinfo
+
+# terraform (infra/)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# editor / os
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
