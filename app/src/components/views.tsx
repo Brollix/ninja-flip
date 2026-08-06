@@ -375,7 +375,7 @@ export function FlipsView({ flips: flipsProp, flipsTs, startPlat, preview }: {
       <DataTable cols={cols} rows={rows} defaultSort="score" maxRows={20} />
     </div>
     {!preview && (isPremium()
-      ? <SuggesterCard flips={flips} mine={mine} startPlat={startPlat} />
+      ? <SuggesterCard flips={flips} mine={mine} startPlat={startPlat} kind={kind} />
       : <div className="card"><PremiumLock feature="Suggested Positions" /></div>)}
     </>
   );
@@ -383,10 +383,15 @@ export function FlipsView({ flips: flipsProp, flipsTs, startPlat, preview }: {
 
 // ---------- Sugeridor de posiciones ----------
 
-function SuggesterCard({ flips, mine, startPlat }: {
+function SuggesterCard({ flips, mine, startPlat, kind }: {
   flips: Flip[];
   mine: Record<string, { buy?: boolean; sell?: boolean }>;
   startPlat: number;
+  /** mismo filtro de tipo que los chips de la tabla de arriba (All/Prime
+   *  sets/Arcanes/Primed mods) — antes este card lo ignoraba del todo:
+   *  filtrabas la tabla a "Prime sets" y "Suggested positions" seguía
+   *  sugiriendo (y dejando postear) arcanos/primed mods igual. */
+  kind: "" | "set" | "arcane" | "mod";
 }) {
   const committed = useMemo(() => {
     try {
@@ -411,6 +416,7 @@ function SuggesterCard({ flips, mine, startPlat }: {
     // confianza(liquidez) × confianza(margen)) — una sola fórmula, no una copia local
     const cands = flips
       .filter(f => f.buy > 0 && f.vol48 >= 30 && f.margin >= 12 && perTradeProfit(f) >= 15 &&
+                   (!kind || (f.kind ?? "set") === kind) &&
                    !mine[f.slug]?.buy && !mine[f.slug]?.sell)
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     const picks: { f: Flip; cost: number; resell: number; qty: number; profit: number }[] = [];
@@ -429,7 +435,7 @@ function SuggesterCard({ flips, mine, startPlat }: {
       cap -= cost * qty;
     }
     return { picks, capLeft: cap };
-  }, [flips, mine, capital, tradesLeft]);
+  }, [flips, mine, capital, tradesLeft, kind]);
 
   const totProfit = plan.picks.reduce((a, p) => a + p.profit, 0);
   const totCost = plan.picks.reduce((a, p) => a + p.cost, 0);
@@ -440,6 +446,7 @@ function SuggesterCard({ flips, mine, startPlat }: {
       <p className="hint">
         Live flips you have no order on, ranked by score (spread, discounted by how sure you can buy and resell it), greedily fit to your free
         capital and remaining trades (2 per flip). Skips profits under 5p. Posting one updates the plan.
+        {kind && <> Filtered to <b>{kind === "set" ? "prime sets" : kind === "arcane" ? "arcanes" : "primed mods"}</b>, same as the table above.</>}
       </p>
       <div className="controls">
         <label className="sim-field" title="Your current plat minus what's already tied up in active buy orders — edit to override">

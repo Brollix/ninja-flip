@@ -64,6 +64,12 @@ const online = (o: TopOrder) =>
 
 // cache local: la pestaña abre al instante con el último chequeo conocido
 const CACHE_KEY = "orders_cache_v2";
+// Si el cache tiene menos de esto, el montaje inicial NO vuelve a pegarle a
+// warframe.market (1 request por orden, ver checkOneOrder) — solo pinta lo
+// que ya había. Sin esto, cada recarga de la pestaña (probar un fix, F5 de
+// más, etc.) repetía el sweep completo aunque el anterior tuviera segundos.
+// El timer de auto-refresh (autoMin) sigue corriendo normal después.
+const MOUNT_SKIP_IF_FRESHER_THAN_MS = 45_000;
 
 function readCache(): { ts: number; orders: CheckedOrder[] } | null {
   try {
@@ -781,7 +787,8 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
 
   // primera carga + actualización dirigida cuando el composer publica/edita algo
   useEffect(() => {
-    refresh();
+    const fresh = cached && Date.now() - cached.ts < MOUNT_SKIP_IF_FRESHER_THAN_MS;
+    if (!fresh) refresh();
     const onChanged = (e: Event) => {
       const detail = (e as CustomEvent<OrderChangeDetail | undefined>).detail;
       if (detail?.kind === "new") void checkNewOrder(detail);
