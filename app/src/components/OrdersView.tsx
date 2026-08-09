@@ -804,7 +804,11 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
     setRowBusy(o.id);
     try {
       await updateOrder(o.id, { platinum: o.fixPrice! });
-      await refresh();
+      // igual que editar a mano desde el Composer: TU precio cambió, los
+      // rivales no — recalcula local, 0 requests extra a warframe.market
+      // (antes esto disparaba un refresh() completo, un request por CADA
+      // orden que tuvieras, solo para arreglar una).
+      patchEditedOrder({ kind: "edit", id: o.id, price: o.fixPrice! });
     } catch (e) {
       setErrMsg(e instanceof Error ? e.message : String(e));
       setState("error");
@@ -834,18 +838,22 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
     }
   }
 
+  // solo sacamos esta fila — un refresh() completo vuelve a chequear el
+  // libro de CADA orden contra la API, no hace falta para borrar/cerrar una
+  function removeOrderFromState(id: string) {
+    setOrders(prev => {
+      const next = prev?.filter(x => x.id !== id) ?? null;
+      if (next) writeCache(next);
+      return next;
+    });
+  }
+
   async function remove(o: CheckedOrder) {
     setRowBusy(o.id);
     try {
       await deleteOrder(o.id);
       removeCostBasis(o.id);
-      // solo sacamos esta fila — un refresh() completo vuelve a chequear
-      // el libro de CADA orden contra la API, no hace falta para borrar una
-      setOrders(prev => {
-        const next = prev?.filter(x => x.id !== o.id) ?? null;
-        if (next) writeCache(next);
-        return next;
-      });
+      removeOrderFromState(o.id);
     } catch (e) {
       setErrMsg(e instanceof Error ? e.message : String(e));
       setState("error");
@@ -1211,7 +1219,13 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
     {soldOrder && (
       <SoldDialog order={soldOrder}
                   basePlat={basePlat}
-                  onDone={() => { setSoldOrder(null); refresh(); }}
+                  // el pedido a warframe.market que cierra la orden ya pasó
+                  // adentro de SoldDialog (closeOrder) — acá solo hace falta
+                  // sacarla de la lista local. Antes esto hacía un refresh()
+                  // completo (1 request por CADA orden que tuvieras) cada vez
+                  // que confirmabas un bought/sold, incluso si solo decías
+                  // "no, done" sin repostear nada.
+                  onDone={() => { removeOrderFromState(soldOrder.id); setSoldOrder(null); }}
                   onCancel={() => setSoldOrder(null)} />
     )}
     </>
