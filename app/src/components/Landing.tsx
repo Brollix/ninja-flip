@@ -3,7 +3,6 @@ import { BarChart3, ChevronDown, Gem, Link2, NotebookText, Radio } from "lucide-
 import type { Flip } from "../types";
 import { LoginForm } from "./Composer";
 import { FlipsView } from "./views";
-import { PeakTimeBadge } from "./PeakTime";
 
 const FEATURES = [
   {
@@ -82,7 +81,6 @@ export function Landing() {
         <div className="landing-live-label">
           <Radio size={22} className="inline-icon" /> Live data, no login required — see it working before you connect anything
         </div>
-        <PeakTimeBadge />
         {flips.length > 0
           ? <FlipsView flips={flips} flipsTs={flipsTs} startPlat={0} preview />
           : <p className="hint standalone">Loading live flips…</p>}

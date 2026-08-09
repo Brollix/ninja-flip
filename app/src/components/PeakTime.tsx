@@ -39,11 +39,14 @@ export function usePeakTime() {
   for (const [h, v] of byHour) if (v > peakVol) { peakVol = v; peakHour = h; }
   const now = new Date();
   const curHour = now.getHours();
-  const diffHours = (peakHour - curHour + 24) % 24;
-  const minsIntoHour = now.getMinutes();
-  const isPeakNow = diffHours === 0;
-  const minsUntil = isPeakNow ? 0 : diffHours * 60 - minsIntoHour;
-  return { peakHour, isPeakNow, minsUntil };
+  const isPeakNow = curHour === peakHour;
+  const nowMins = curHour * 60 + now.getMinutes();
+  const peakMins = peakHour * 60;
+  // minutos desde la última ocurrencia pasada (0-1439) y hasta la próxima —
+  // se repite cada 24h, así que ambos se derivan del mismo módulo.
+  const minsSince = ((nowMins - peakMins) % 1440 + 1440) % 1440;
+  const minsUntil = (1440 - minsSince) % 1440;
+  return { peakHour, isPeakNow, minsUntil, minsSince };
 }
 
 function fmtHour(hour: number): string {
@@ -53,11 +56,16 @@ function fmtHour(hour: number): string {
 export function PeakTimeBadge() {
   const peak = usePeakTime();
   if (!peak) return null;
-  const { isPeakNow, peakHour, minsUntil } = peak;
+  const { isPeakNow, peakHour, minsUntil, minsSince } = peak;
+  // Si el pico pasó hace poco (<12h) es más útil decir "hace cuánto" que
+  // "falta 22h" para el próximo — evita que un pico reciente se sienta lejano.
+  const wasRecent = !isPeakNow && minsSince < 12 * 60;
   return (
     <span className="peak-badge" title={`Busiest trading hour across all scanned items: ${fmtHour(peakHour)}`}>
       {isPeakNow
         ? <><Flame size={13} className="inline-icon" /> Peak trading hour — now</>
+        : wasRecent
+        ? <><Flame size={13} className="inline-icon" /> Peak trading hour was {Math.floor(minsSince / 60)}h {minsSince % 60}m ago</>
         : <><Clock size={13} className="inline-icon" /> Peak trading in {Math.floor(minsUntil / 60)}h {minsUntil % 60}m</>}
     </span>
   );
