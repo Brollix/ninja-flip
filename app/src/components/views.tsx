@@ -122,6 +122,9 @@ function myOrdersBySlug(): Record<string, { buy?: boolean; sell?: boolean }> {
   } catch { return {}; }
 }
 
+const LIVE_REFRESH_TOP = 15;
+const LIVE_REFRESH_MS = 5 * 60_000;
+
 export function FlipsView({ flips: flipsProp, flipsTs, startPlat, preview }: {
   flips: Flip[]; flipsTs: number | null; startPlat: number;
   /** Vista pública sin cuenta conectada (landing): sin botones de postear
@@ -174,13 +177,13 @@ export function FlipsView({ flips: flipsProp, flipsTs, startPlat, preview }: {
 
   async function refreshLive(force = false) {
     if (busyRef.current) return; // ya hay una corrida en curso
-    // top 25 por score, no por spread crudo — así el refresco en vivo
-    // mantiene fresco lo que de verdad conviene flipear, no lo que da la
-    // casualidad de tener el spread más grande (que puede ser ilíquido)
+    // top LIVE_REFRESH_TOP por score, no por spread crudo — así el refresco
+    // en vivo mantiene fresco lo que de verdad conviene flipear, no lo que
+    // da la casualidad de tener el spread más grande (que puede ser ilíquido)
     const targets = [...rowsRef.current]
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
       .filter(f => force || !refreshedRef.current.has(f.slug))
-      .slice(0, 25);
+      .slice(0, LIVE_REFRESH_TOP);
     if (!targets.length) { setLive("done"); return; }
     busyRef.current = true;
     setLive("running");
@@ -214,14 +217,18 @@ export function FlipsView({ flips: flipsProp, flipsTs, startPlat, preview }: {
     }
   }
 
-  // Auto-refresco liviano: al montar y cada 90s, re-cotiza en vivo el top 25
-  // por spread (unos 20 requests, ~8s a nuestro rate limit). Como el refresco
-  // ahora es no-destructivo (nunca pisa un dato bueno con 0), no hay riesgo
-  // de que una fila desaparezca — solo se pone más al día sola.
+  // Auto-refresco liviano: al montar y cada LIVE_REFRESH_MS, re-cotiza en
+  // vivo el top LIVE_REFRESH_TOP por spread. Como el refresco ahora es
+  // no-destructivo (nunca pisa un dato bueno con 0), no hay riesgo de que
+  // una fila desaparezca — solo se pone más al día sola.
+  // Antes: top 25 cada 90s (~1000 requests/hora por pestaña abierta, entre
+  // esta vista y la de la Landing) para datos que igual no se mueven tan
+  // rápido — 5 min / top 15 sigue siendo "fresco" para flipear a mano y baja
+  // bastante el volumen contra warframe.market.
   useEffect(() => {
     if (!flipsProp.length) return;
     refreshLive();
-    const id = setInterval(() => refreshLive(true), 90_000);
+    const id = setInterval(() => refreshLive(true), LIVE_REFRESH_MS);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flipsProp.length]);

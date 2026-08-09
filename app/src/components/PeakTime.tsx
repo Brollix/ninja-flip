@@ -3,18 +3,45 @@ import { Flame, Clock } from "lucide-react";
 
 interface Bucket { ts: string; volume: number }
 
+// Compartido a nivel módulo (no por-instancia del hook) — PeakTimeBadge (en
+// el header, siempre montado) y PeakTimeChart (dentro de FlipsView) llamaban
+// usePeakTimeData() cada uno por su cuenta, así que tener las dos montadas
+// a la vez disparaba el mismo fetch dos veces. Con esto, el segundo caller
+// reusa el fetch en vuelo del primero, y un resultado de menos de
+// SHARED_TTL_MS no vuelve a pedirse en absoluto.
+const SHARED_TTL_MS = 60_000;
+let sharedBuckets: Bucket[] | null = null;
+let sharedAt = 0;
+let sharedPromise: Promise<Bucket[]> | null = null;
+
+function fetchPeakTimeShared(): Promise<Bucket[]> {
+  if (sharedBuckets && Date.now() - sharedAt < SHARED_TTL_MS) {
+    return Promise.resolve(sharedBuckets);
+  }
+  if (!sharedPromise) {
+    sharedPromise = fetch("/api/peak-time", { cache: "no-store" })
+      .then(r => r.json())
+      .then((d): Bucket[] => {
+        const buckets: Bucket[] = d.buckets ?? [];
+        sharedBuckets = buckets;
+        sharedAt = Date.now();
+        return buckets;
+      })
+      .catch((): Bucket[] => sharedBuckets ?? []) // sin red: no hay badge/gráfico, no rompe nada
+      .finally(() => { sharedPromise = null; });
+  }
+  return sharedPromise;
+}
+
 /** Fetch crudo de los baldes horarios cronológicos (volumen agregado de
  *  todos los items escaneados, ventana real de 48h — techo de granularidad
  *  horaria que da la API de wf.market) — compartido entre el badge de
  *  texto y el gráfico. */
 function usePeakTimeData(): Bucket[] {
-  const [buckets, setBuckets] = useState<Bucket[]>([]);
+  const [buckets, setBuckets] = useState<Bucket[]>(sharedBuckets ?? []);
   useEffect(() => {
     let stop = false;
-    fetch("/api/peak-time", { cache: "no-store" })
-      .then(r => r.json())
-      .then(d => { if (!stop) setBuckets(d.buckets ?? []); })
-      .catch(() => { /* sin red: no hay badge/gráfico, no rompe nada */ });
+    fetchPeakTimeShared().then(b => { if (!stop) setBuckets(b); });
     return () => { stop = true; };
   }, []);
   return buckets;
