@@ -41,6 +41,10 @@ export const isConnected = (): boolean => !!getJwt();
 const PER_USER_KEYS = [
   BASIS_KEY, FLIPS_KEY, "wfm_user", "plat_override",
   "aleca_skip_v1", "purchases_dismissed_v1",
+  // "orders_cache_v2" (ver OrdersView.tsx:CACHE_KEY) — sin esto, cambiar de
+  // cuenta en el mismo browser pintaba por un instante el order book
+  // cacheado de la cuenta ANTERIOR hasta el primer refresh real.
+  "orders_cache_v2",
 ];
 
 export function signOut(): void {

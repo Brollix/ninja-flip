@@ -374,13 +374,21 @@ function RecentPurchasesCard({ purchases }: { purchases: Purchase[] }) {
   // registrado no arrastra un costo que nunca pagaste.
   const [paidOverride, setPaidOverride] = useState<Record<string, number>>({});
   const paidFor = (p: Purchase) => paidOverride[key(p)] ?? p.plat_paid ?? 0;
+  // inline en vez de alert() — consistente con cómo esta vista muestra
+  // cualquier otro error (ver errMsg más abajo en OrdersView), y no bloquea
+  // el hilo esperando que cierres un modal nativo del navegador.
+  const [postErrors, setPostErrors] = useState<Record<string, string>>({});
 
   if (!visible.length) return null;
 
   async function postSell(p: Purchase) {
     const name = prettyItemName(p.item);
+    setPostErrors(e => ({ ...e, [key(p)]: "" }));
     const found = await resolveItemByName(name);
-    if (!found) { alert(`Couldn't find "${name}" in the market catalog — post it manually.`); return; }
+    if (!found) {
+      setPostErrors(e => ({ ...e, [key(p)]: `Couldn't find "${name}" in the market catalog — post it manually.` }));
+      return;
+    }
     openComposer({
       itemId: found.id, slug: found.slug, name, type: "sell",
       costBasis: paidFor(p),
@@ -407,6 +415,7 @@ function RecentPurchasesCard({ purchases }: { purchases: Purchase[] }) {
                 {p.plat_paid == null && <span className="muted"> (mixed trade, guessed 0)</span>}
                 {p.market_now > 0 && <> · market now <Plat value={p.market_now} /></>}
               </div>
+              {postErrors[key(p)] && <p className="loss" style={{ margin: "4px 0 0", fontSize: "var(--text-xs)" }}>{postErrors[key(p)]}</p>}
             </div>
             <span className="actions">
               <button className="btn primary" onClick={() => postSell(p)}><SquarePen size={12} className="inline-icon" /> Post sell</button>
@@ -449,6 +458,15 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
   const [autoFixSell, setAutoFixSell] = useState(
     () => localStorage.getItem("wfm_autofix_sell") === "true" ||
           (localStorage.getItem("wfm_autofix_sell") == null && legacyAutoFix));
+  // El loop de auto-undercut en refresh() borra/ajusta órdenes de a una con
+  // 500ms de pausa entre cada una — mismo problema que ya se arregló en
+  // runAutoFill: si destildás un lado (o los dos) A MITAD de esa tanda, sin
+  // esto seguía terminando de borrar/ajustar con el estado viejo. Refs
+  // siempre al día, chequeadas de nuevo dentro del loop antes de cada acción.
+  const autoFixBuyRef = useRef(autoFixBuy);
+  useEffect(() => { autoFixBuyRef.current = autoFixBuy; }, [autoFixBuy]);
+  const autoFixSellRef = useRef(autoFixSell);
+  useEffect(() => { autoFixSellRef.current = autoFixSell; }, [autoFixSell]);
   const [autoFixMinProfit, setAutoFixMinProfit] = useState(
     () => Number(localStorage.getItem("wfm_autofix_min_profit")) || 15);
   const [autoPause, setAutoPause] = useState(() => localStorage.getItem("wfm_autopause") === "true");
@@ -691,6 +709,10 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
         if (toAction.length > 0) {
           for (let i = 0; i < toAction.length; i++) {
             const o = toAction[i];
+            // se destildó auto-undercut para ESTE lado (buy/sell) mientras
+            // esta tanda ya estaba corriendo — no seguir tocando órdenes de
+            // ese lado con un permiso que ya no está.
+            if (o.type === "buy" ? !autoFixBuyRef.current : !autoFixSellRef.current) continue;
             const outOfPos = outOfPosition(o);
             let shouldDelete: boolean;
             if (outOfPos) {
@@ -754,7 +776,7 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
   async function checkNewOrder(d: Extract<OrderChangeDetail, { kind: "new" }>) {
     const raw: RawOrder = {
       id: d.id, type: d.type, platinum: d.price, quantity: d.qty,
-      visible: true, updatedAt: "", itemId: d.itemId, rank: d.rank,
+      visible: true, updatedAt: "", itemId: d.itemId, rank: d.rank, subtype: d.subtype,
     };
     const checked = await checkOneOrder(raw, d.slug, d.name, userRef.current);
     if (!checked) return;
@@ -920,7 +942,12 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
 
   const buyProfit = buys.reduce((a, o) => a + (o.resellAt != null ? o.resellAt - o.price : 0), 0);
   const sellProfit = sells.reduce((a, o) => a + (o.costBasis != null ? o.price - o.costBasis : 0), 0);
-  const allFlips = getAllFlips();
+  // memoizado por `orders`, no recalculado en cada render — este componente
+  // re-renderiza cada segundo por el countdown del auto-refresh, y
+  // getAllFlips() hace un filter+dedupe sobre TODO el historial (wfm.ts)
+  // cada vez que se llama. `orders` cambia justo cuando puede haber un flip
+  // nuevo logueado (SoldDialog) o alguno restaurado por refresh().
+  const allFlips = useMemo(() => getAllFlips(), [orders]);
   const realized = allFlips.reduce((a, f) => a + (f.sell - f.buy), 0);
 
   const sortedFlips = [...allFlips].sort((a, b) => b.ts - a.ts);

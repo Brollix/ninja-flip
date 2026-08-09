@@ -32,7 +32,7 @@ export function openComposer(p: ComposerPrefill = {}) {
  *  en vez de re-chequear todas las órdenes contra la API cada vez. */
 export type OrderChangeDetail =
   | { kind: "new"; id: string; itemId: string; slug: string; name: string;
-      type: "buy" | "sell"; price: number; qty: number; rank?: number }
+      type: "buy" | "sell"; price: number; qty: number; rank?: number; subtype?: string }
   | { kind: "edit"; id: string; price: number; qty?: number };
 
 export function ordersChanged(detail?: OrderChangeDetail) {
@@ -225,7 +225,7 @@ export function Composer() {
         }
         if (order?.id) {
           ordersChanged({ kind: "new", id: order.id, itemId: item.id, slug: item.slug,
-                          name: item.name, type, price, qty, rank: rank || undefined });
+                          name: item.name, type, price, qty, rank: rank || undefined, subtype });
         }
       }
       setDone(true);
