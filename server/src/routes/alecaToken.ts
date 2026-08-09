@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "../db.js";
 import { requireWfmUser } from "../wfmAuth.js";
+import { asyncHandler } from "../asyncHandler.js";
 
 // Cada usuario pega su propio token público de AlecaFrame ("Create Public
 // Link" en su tab de Stats) una sola vez — reemplaza el ALECA_PUBLIC_TOKEN
@@ -8,15 +9,15 @@ import { requireWfmUser } from "../wfmAuth.js";
 export const alecaTokenRouter = Router();
 alecaTokenRouter.use(requireWfmUser);
 
-alecaTokenRouter.get("/", async (req, res) => {
+alecaTokenRouter.get("/", asyncHandler(async (req, res) => {
   const { rows } = await pool.query(
     "SELECT aleca_public_token FROM user_aleca_tokens WHERE wfm_user_id = $1",
     [req.wfmUserId],
   );
   res.json({ token: rows[0]?.aleca_public_token ?? null });
-});
+}));
 
-alecaTokenRouter.post("/", async (req, res) => {
+alecaTokenRouter.post("/", asyncHandler(async (req, res) => {
   const token = (req.body?.token ?? "").trim();
   if (!token) {
     res.status(400).json({ error: "missing token" });
@@ -30,4 +31,4 @@ alecaTokenRouter.post("/", async (req, res) => {
     [req.wfmUserId, token],
   );
   res.json({ ok: true });
-});
+}));

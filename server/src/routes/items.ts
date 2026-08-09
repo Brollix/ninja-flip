@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { asyncHandler } from "../asyncHandler.js";
 
 // Catálogo completo de warframe.market (id -> [slug, nombre]) — antes
 // app/public/data/items.json, generado a mano junto al report. No es
@@ -10,7 +11,7 @@ let cache: Record<string, [string, string]> | null = null;
 let cacheAt = 0;
 const TTL_MS = 24 * 3600 * 1000;
 
-itemsRouter.get("/", async (_req, res) => {
+itemsRouter.get("/", asyncHandler(async (_req, res) => {
   if (!cache || Date.now() - cacheAt > TTL_MS) {
     const r = await fetch("https://api.warframe.market/v2/items");
     if (!r.ok) {
@@ -22,4 +23,4 @@ itemsRouter.get("/", async (_req, res) => {
     cacheAt = Date.now();
   }
   res.json(cache);
-});
+}));

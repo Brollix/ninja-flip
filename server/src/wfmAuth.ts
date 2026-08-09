@@ -61,6 +61,7 @@ export async function requireWfmUser(req: Request, res: Response, next: NextFunc
     req.wfmUserId = wfmUserId;
     next();
   } catch (e) {
-    res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+    console.error("requireWfmUser: fetch /v2/me failed:", e);
+    res.status(502).json({ error: "couldn't verify warframe.market session" });
   }
 }

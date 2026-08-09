@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db.js";
+import { asyncHandler } from "../asyncHandler.js";
 
 // Datos de mercado: iguales para todos los usuarios, sin auth — los escribe
 // el Cloud Run Job flip-scanner (scripts/flips.py). Mismo shape que antes
@@ -8,7 +9,7 @@ export const flipsRouter = Router();
 
 const MIN_VOL48 = 10;
 
-flipsRouter.get("/", async (_req, res) => {
+flipsRouter.get("/", asyncHandler(async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT slug, name, kind, rank, buy, sell, vol48, score, price_ts,
             parts_total, parts_profit, parts_detail
@@ -33,4 +34,4 @@ flipsRouter.get("/", async (_req, res) => {
     parts_detail: r.parts_detail ?? undefined,
   }));
   res.json({ ts: Date.now() / 1000, flips });
-});
+}));

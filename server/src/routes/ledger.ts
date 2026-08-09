@@ -2,13 +2,14 @@ import { Router } from "express";
 import { pool } from "../db.js";
 import { requireWfmUser } from "../wfmAuth.js";
 import { isPremiumServer } from "../premium.js";
+import { asyncHandler } from "../asyncHandler.js";
 
 // Reemplaza /ledger/* del plugin de Vite (ledger.db, SQLite, sin scoping) —
 // mismas rutas/shape, ahora Postgres + wfm_user_id por fila.
 export const ledgerRouter = Router();
 ledgerRouter.use(requireWfmUser);
 
-ledgerRouter.get("/all", async (req, res) => {
+ledgerRouter.get("/all", asyncHandler(async (req, res) => {
   const userId = req.wfmUserId!;
   const flipsQ = pool.query(
     "SELECT item, buy, sell, ts FROM user_ledger_flips WHERE wfm_user_id = $1 ORDER BY ts",
@@ -49,9 +50,9 @@ ledgerRouter.get("/all", async (req, res) => {
     // después, ya tiene el historial acumulado esperándolo.
     detectedFlips: premium ? detected.rows.map(toNum) : [],
   });
-});
+}));
 
-ledgerRouter.post("/flip", async (req, res) => {
+ledgerRouter.post("/flip", asyncHandler(async (req, res) => {
   const userId = req.wfmUserId!;
   const { item, buy, sell, ts } = req.body ?? {};
   if (!item || buy == null || sell == null || !ts) {
@@ -65,9 +66,9 @@ ledgerRouter.post("/flip", async (req, res) => {
     [userId, item, buy, sell, ts],
   );
   res.json({ ok: true });
-});
+}));
 
-ledgerRouter.post("/basis", async (req, res) => {
+ledgerRouter.post("/basis", asyncHandler(async (req, res) => {
   const userId = req.wfmUserId!;
   const { orderId, cost, item, ts } = req.body ?? {};
   if (!orderId || cost == null) {
@@ -83,13 +84,13 @@ ledgerRouter.post("/basis", async (req, res) => {
     [orderId, userId, item ?? "", cost, ts ?? Date.now()],
   );
   res.json({ ok: true });
-});
+}));
 
-ledgerRouter.delete("/basis/:orderId", async (req, res) => {
+ledgerRouter.delete("/basis/:orderId", asyncHandler(async (req, res) => {
   const userId = req.wfmUserId!;
   await pool.query(
     "DELETE FROM user_cost_basis WHERE order_id = $1 AND wfm_user_id = $2",
     [req.params.orderId, userId],
   );
   res.json({ ok: true });
-});
+}));

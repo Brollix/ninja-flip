@@ -3,6 +3,7 @@ import { pool } from "../db.js";
 import { requireWfmUser } from "../wfmAuth.js";
 import { fetchIdToken } from "../gcpAuth.js";
 import { isPremiumServer } from "../premium.js";
+import { asyncHandler } from "../asyncHandler.js";
 
 // El análisis de reliquias (parseo binario, cruce con drop tables, EV) sigue
 // en Python (scripts/report_server.py) — es tan intrincado como flips.py y
@@ -14,7 +15,7 @@ reportRouter.use(requireWfmUser);
 
 const REPORT_SERVICE_URL = process.env.REPORT_SERVICE_URL;
 
-reportRouter.get("/", async (req, res) => {
+reportRouter.get("/", asyncHandler(async (req, res) => {
   const userId = req.wfmUserId!;
   const { rows } = await pool.query(
     "SELECT aleca_public_token FROM user_aleca_tokens WHERE wfm_user_id = $1",
@@ -55,6 +56,7 @@ reportRouter.get("/", async (req, res) => {
     const body = await upstream.text();
     res.status(upstream.status).setHeader("content-type", "application/json").send(body);
   } catch (e) {
-    res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+    console.error("report proxy failed:", e);
+    res.status(502).json({ error: "couldn't reach the report service" });
   }
-});
+}));

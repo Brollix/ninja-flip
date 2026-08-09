@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { asyncHandler } from "../asyncHandler.js";
 
 // Reemplaza el proxy /wfm del dev server de Vite: api.warframe.market no
 // manda CORS, así que el browser no puede pegarle directo ni en local ni
@@ -10,7 +11,7 @@ export const wfmProxyRouter = Router();
 
 const FORWARD_REQUEST_HEADERS = ["authorization", "content-type"];
 
-wfmProxyRouter.all("*", async (req, res) => {
+wfmProxyRouter.all("*", asyncHandler(async (req, res) => {
   const target = `https://api.warframe.market${req.path}`;
   const headers: Record<string, string> = {};
   for (const h of FORWARD_REQUEST_HEADERS) {
@@ -31,6 +32,7 @@ wfmProxyRouter.all("*", async (req, res) => {
     res.setHeader("content-type", upstream.headers.get("content-type") ?? "application/json");
     res.send(text);
   } catch (e) {
-    res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+    console.error("wfm proxy failed:", e);
+    res.status(502).json({ error: "couldn't reach warframe.market" });
   }
-});
+}));

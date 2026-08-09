@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { Router } from "express";
 import { pool } from "../db.js";
 import { requireWfmUser } from "../wfmAuth.js";
+import { asyncHandler } from "../asyncHandler.js";
 
 // Premium por Patreon — "Connect with Patreon" real (OAuth por usuario), como
 // recomienda Patreon incluso para herramientas de un solo creador: el usuario
@@ -31,20 +32,20 @@ async function cleanupOldStates(): Promise<void> {
 
 premiumRouter.use(requireWfmUser);
 
-premiumRouter.get("/", async (req, res) => {
+premiumRouter.get("/", asyncHandler(async (req, res) => {
   const { rows } = await pool.query(
     "SELECT active FROM user_premium WHERE wfm_user_id = $1",
     [req.wfmUserId],
   );
   res.json({ premium: rows[0]?.active === true });
-});
+}));
 
 /** Arranca el login: genera un "state" de un solo uso atado a este
  *  wfm_user_id y devuelve la URL de Patreon a la que el FRONTEND tiene que
  *  navegar (window.location.href = url, no fetch — tiene que ser una
  *  navegación real de browser para que Patreon pueda mostrar su propia
  *  pantalla de login/consentimiento). */
-premiumRouter.get("/authorize", async (req, res) => {
+premiumRouter.get("/authorize", asyncHandler(async (req, res) => {
   if (!clientId || !redirectUri) {
     res.status(500).json({ error: "Patreon OAuth no configurado (falta PATREON_CLIENT_ID/PATREON_REDIRECT_URI)" });
     return;
@@ -62,7 +63,7 @@ premiumRouter.get("/authorize", async (req, res) => {
   url.searchParams.set("scope", OAUTH_SCOPE);
   url.searchParams.set("state", state);
   res.json({ url: url.toString() });
-});
+}));
 
 interface TokenResponse {
   access_token: string;
