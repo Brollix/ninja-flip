@@ -38,6 +38,10 @@ CREATE TABLE IF NOT EXISTS market_items (
 ALTER TABLE market_items ADD COLUMN IF NOT EXISTS parts_total REAL;
 ALTER TABLE market_items ADD COLUMN IF NOT EXISTS parts_profit REAL;
 ALTER TABLE market_items ADD COLUMN IF NOT EXISTS parts_detail TEXT;
+-- flipsRouter (server/src/routes/flips.ts) y flips.py hacen exactamente este
+-- filtro+orden en cada request/corrida ("WHERE vol48 >= X ORDER BY score
+-- DESC") — sin índice, full scan + sort completo de la tabla cada vez.
+CREATE INDEX IF NOT EXISTS idx_market_items_vol48_score ON market_items (vol48, score DESC);
 
 -- ---------------------------------------------------------------------------
 -- Ledger de flips cerrados (🛒 bought → 💰 sold), por usuario.
@@ -53,6 +57,9 @@ CREATE TABLE IF NOT EXISTS user_ledger_flips (
   UNIQUE (wfm_user_id, item, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_user_ledger_flips_user ON user_ledger_flips (wfm_user_id);
+-- ledger.ts hace "WHERE wfm_user_id = $1 ORDER BY ts" — compuesto para que
+-- el ORDER BY también salga del índice, no de un sort en memoria aparte.
+CREATE INDEX IF NOT EXISTS idx_user_ledger_flips_user_ts ON user_ledger_flips (wfm_user_id, ts);
 
 -- ---------------------------------------------------------------------------
 -- Flips detectados automáticamente cruzando compras y ventas del historial
@@ -75,6 +82,7 @@ CREATE TABLE IF NOT EXISTS user_detected_flips (
   UNIQUE (wfm_user_id, item, ts)
 );
 CREATE INDEX IF NOT EXISTS idx_user_detected_flips_user ON user_detected_flips (wfm_user_id);
+CREATE INDEX IF NOT EXISTS idx_user_detected_flips_user_ts ON user_detected_flips (wfm_user_id, ts);
 
 -- ---------------------------------------------------------------------------
 -- Cost basis de órdenes de venta abiertas (lo que pagaste, para calcular el
@@ -134,6 +142,10 @@ CREATE TABLE IF NOT EXISTS patreon_oauth_state (
   wfm_user_id TEXT NOT NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- cleanupOldStates() (server/src/routes/premium.ts) filtra por created_at en
+-- cada intento de login con Patreon — la tabla se mantiene chica sola gracias
+-- a ese mismo cleanup, pero de todos modos el índice sale gratis.
+CREATE INDEX IF NOT EXISTS idx_patreon_oauth_state_created_at ON patreon_oauth_state (created_at);
 
 -- ---------------------------------------------------------------------------
 -- Snapshot cacheado del reporte de reliquias/historial/ventas por usuario
@@ -160,9 +172,16 @@ CREATE TABLE IF NOT EXISTS item_price_cache (
   sell        REAL NOT NULL DEFAULT 0,
   med48       REAL NOT NULL DEFAULT 0,
   vol48       INTEGER NOT NULL DEFAULT 0,
-  ducats      INTEGER NOT NULL DEFAULT 0,
+  -- NULL, no 0: ducats se cachea "para siempre" (nunca vencen), así que un 0
+  -- forzado por un fetch fallido quedaba mal de por vida — NULL es la señal
+  -- de "reintentar la próxima vez" (ver fetch_ducats/get_item_data en
+  -- relic_analysis.py). ALTER en vez de solo la definición de CREATE TABLE
+  -- porque este archivo se reaplica sobre la tabla ya existente.
+  ducats      INTEGER,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE item_price_cache ALTER COLUMN ducats DROP NOT NULL;
+ALTER TABLE item_price_cache ALTER COLUMN ducats DROP DEFAULT;
 
 -- ---------------------------------------------------------------------------
 -- Precio de venta de la reliquia ENTERA ("Meso D3 Relic"), compartido,

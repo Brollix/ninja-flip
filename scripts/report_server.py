@@ -55,8 +55,13 @@ def generate_and_save_report(wfm_user_id: str, aleca_token: str) -> dict:
     for f in detected_flips:
         try:
             flip_rows.append((wfm_user_id, f["item"], f["buy"], f["sell"], to_epoch_ms(f["ts"]), f.get("market_now")))
-        except (ValueError, TypeError):
-            continue  # ts rara/ausente: no vale la pena tirar todo el reporte por esto
+        except (ValueError, TypeError, KeyError):
+            # ts rara/ausente O falta item/buy/sell (drift de schema): no vale
+            # la pena tirar TODO el reporte (incluido report_json, que recién
+            # se guarda más abajo) por una sola fila de detected_flips mal
+            # formada — antes un KeyError acá no lo atrapaba nada y abortaba
+            # generate_and_save_report entero.
+            continue
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("""
@@ -102,7 +107,12 @@ def report():
     try:
         data = generate_and_save_report(wfm_user_id, aleca_token)
     except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        # str(e) tal cual podía filtrar detalles internos al cliente (antes:
+        # el token de AlecaFrame, si venía embebido en la URL de un error de
+        # requests — ver relic_analysis.py). El detalle real queda en los
+        # logs de Cloud Run, no en la respuesta.
+        print(f"generate_and_save_report failed for wfm_user_id={wfm_user_id}: {e}", flush=True)
+        return jsonify({"error": "report generation failed"}), 502
 
     return jsonify(data)
 

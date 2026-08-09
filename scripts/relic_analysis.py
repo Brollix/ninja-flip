@@ -61,33 +61,51 @@ session.headers["User-Agent"] = "relic-analyzer/1.0"
 
 def get_relic_inventory(public_token: str) -> list:
     """Devuelve [{tier, name, refinement, count}] desde AlecaFrame."""
-    r = session.get(
-        "https://stats.alecaframe.com/api/stats/public/getRelicInventory",
-        params={"publicToken": public_token}, timeout=30)
-    r.raise_for_status()
-    raw = base64.b64decode(r.json())
-    # El header declara la cantidad, pero a veces no coincide con el buffer:
-    # parseamos registros de 9 bytes hasta agotarlo.
-    relics, off = [], 4
-    while off + 9 <= len(raw):
-        tier, ref = struct.unpack_from("<BB", raw, off)
-        name = raw[off + 2:off + 5].decode("ascii").strip()
-        (count,) = struct.unpack_from("<I", raw, off + 5)
-        relics.append({
-            "tier": RELIC_TIERS.get(tier, f"?{tier}"),
-            "name": name,
-            "refinement": REFINEMENTS.get(ref, f"?{ref}"),
-            "count": count,
-        })
-        off += 9
-    return relics
+    try:
+        r = session.get(
+            "https://stats.alecaframe.com/api/stats/public/getRelicInventory",
+            params={"publicToken": public_token}, timeout=30)
+        r.raise_for_status()
+        raw = base64.b64decode(r.json())
+        # El header declara la cantidad, pero a veces no coincide con el buffer:
+        # parseamos registros de 9 bytes hasta agotarlo.
+        relics, off = [], 4
+        while off + 9 <= len(raw):
+            tier, ref = struct.unpack_from("<BB", raw, off)
+            name = raw[off + 2:off + 5].decode("ascii").strip()
+            (count,) = struct.unpack_from("<I", raw, off + 5)
+            relics.append({
+                "tier": RELIC_TIERS.get(tier, f"?{tier}"),
+                "name": name,
+                "refinement": REFINEMENTS.get(ref, f"?{ref}"),
+                "count": count,
+            })
+            off += 9
+        return relics
+    except requests.RequestException as e:
+        # NO relanzar tal cual: el __str__ de un HTTPError de requests
+        # incluye la URL completa pedida, con el publicToken en la query
+        # string — eso se propagaba sin filtrar hasta el JSON de error que
+        # ve el cliente en /api/report (report_server.py captura Exception
+        # y hace str(e) directo).
+        status = getattr(e.response, "status_code", "?")
+        raise RuntimeError(f"AlecaFrame getRelicInventory falló (HTTP {status})") from e
+    except (ValueError, UnicodeDecodeError, struct.error) as e:
+        # payload corrupto/inesperado (base64 inválido, bytes no-ASCII en el
+        # nombre, buffer mal alineado) — antes esto no tenía ningún fallback,
+        # a diferencia de get_player_stats (manejado en build_report).
+        raise RuntimeError(f"AlecaFrame getRelicInventory devolvió un payload inválido: {e}") from e
 
 
 def get_player_stats(public_token: str) -> dict:
-    r = session.get("https://stats.alecaframe.com/api/stats/public",
-                    params={"token": public_token}, timeout=30)
-    r.raise_for_status()
-    return r.json()
+    try:
+        r = session.get("https://stats.alecaframe.com/api/stats/public",
+                        params={"token": public_token}, timeout=30)
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException as e:
+        status = getattr(e.response, "status_code", "?")
+        raise RuntimeError(f"AlecaFrame stats falló (HTTP {status})") from e
 
 
 # ---------- fuentes externas ----------
@@ -192,29 +210,48 @@ def normalize(name: str) -> str:
 
 # ---------- warframe.market por item ----------
 
-def fetch_sell_price(slug: str) -> float:
+def get_json_retry(url: str, tries: int = 3):
+    """GET tolerante: reintenta 429/timeouts antes de rendirse, devuelve None
+    si no hay caso — mismo patrón que flips.py:get_json. Sin esto, un solo
+    429 pasajero se guardaba como un CERO real en el cache compartido de 12h
+    (o, para ducados, para siempre — ver fetch_ducats)."""
+    for attempt in range(tries):
+        try:
+            r = session.get(url, timeout=30)
+            if r.status_code == 429:
+                time.sleep(2 + attempt * 2)
+                continue
+            if r.status_code != 200:
+                return None
+            return r.json()
+        except requests.RequestException:
+            time.sleep(1 + attempt * 2)
+    return None
+
+
+def fetch_sell_price(slug: str) -> float | None:
     """Promedio de las 3 sell orders más baratas de usuarios conectados.
+    None = no se pudo confirmar (fallo de red/rate-limit), no "vale 0".
 
     'platinum' es el total de la tanda cuando perTrade > 1: se divide
     para obtener el precio unitario real.
     """
-    r = session.get(f"https://api.warframe.market/v2/orders/item/{slug}/top",
-                    timeout=30)
-    if r.status_code != 200:
-        return 0.0
+    body = get_json_retry(f"https://api.warframe.market/v2/orders/item/{slug}/top")
+    if body is None:
+        return None
     sells = sorted(o["platinum"] / max(o.get("perTrade") or 1, 1)
-                   for o in r.json()["data"].get("sell", [])
+                   for o in body["data"].get("sell", [])
                    if o.get("user", {}).get("status") == "ingame")
     return sum(sells[:3]) / len(sells[:3]) if sells else 0.0
 
 
 def fetch_closed_stats(slug: str):
-    """(mediana ponderada, volumen) de ventas cerradas en 48 h."""
-    r = session.get(
-        f"https://api.warframe.market/v1/items/{slug}/statistics", timeout=30)
-    if r.status_code != 200:
-        return 0.0, 0
-    hours = r.json().get("payload", {}).get("statistics_closed", {}).get("48hours", [])
+    """(mediana ponderada, volumen) de ventas cerradas en 48 h.
+    (None, None) = no se pudo confirmar, distinto de (0.0, 0) = sin ventas."""
+    body = get_json_retry(f"https://api.warframe.market/v1/items/{slug}/statistics")
+    if body is None:
+        return None, None
+    hours = body.get("payload", {}).get("statistics_closed", {}).get("48hours", [])
     vol = sum(h.get("volume", 0) for h in hours)
     if not vol:
         return 0.0, 0
@@ -222,11 +259,15 @@ def fetch_closed_stats(slug: str):
     return round(med, 1), vol
 
 
-def fetch_ducats(slug: str) -> int:
-    r = session.get(f"https://api.warframe.market/v2/item/{slug}", timeout=30)
-    if r.status_code != 200:
-        return 0
-    return r.json()["data"].get("ducats") or 0
+def fetch_ducats(slug: str) -> int | None:
+    """None = no se pudo confirmar — a diferencia de sell/med48/vol48 (TTL de
+    12h, se corrige solo), los ducados se guardan "para siempre" (no cambian)
+    y solo se re-piden si siguen en NULL — un 0 guardado a la fuerza acá
+    quedaba mal permanentemente."""
+    body = get_json_retry(f"https://api.warframe.market/v2/item/{slug}")
+    if body is None:
+        return None
+    return body["data"].get("ducats") or 0
 
 
 def get_item_data(item_names: set, by_name: dict, refresh: bool) -> dict:
@@ -252,8 +293,11 @@ def get_item_data(item_names: set, by_name: dict, refresh: bool) -> dict:
                   f"(~{mins:.0f} min)...")
 
         # ducados: se cachean para siempre (no cambian) — leemos lo que haya
-        # aunque esté vencido el resto del TTL, para no re-pedirlos de más
-        cur.execute("SELECT name, ducats FROM item_price_cache WHERE name = ANY(%s)",
+        # aunque esté vencido el resto del TTL, para no re-pedirlos de más.
+        # "AND ducats IS NOT NULL": un NULL significa "el último intento
+        # falló" (ver fetch_ducats) — sin este filtro, ese NULL se trataba
+        # como un valor real ya conocido y nunca se reintentaba.
+        cur.execute("SELECT name, ducats FROM item_price_cache WHERE name = ANY(%s) AND ducats IS NOT NULL",
                     (missing,))
         known_ducats = dict(cur.fetchall())
 
@@ -280,7 +324,16 @@ def get_item_data(item_names: set, by_name: dict, refresh: bool) -> dict:
             if ducats is None:
                 ducats = fetch_ducats(slug)
                 time.sleep(RATE)
-            cache[name] = {"sell": sell, "med48": med48, "vol48": vol48, "ducats": ducats}
+            # sell/med48/vol48 SÍ pueden guardarse en 0 en un fallo — tienen
+            # TTL de 12h, se autocorrigen solos en el próximo refresh. ducats
+            # se guarda tal cual (puede ser None -> NULL en la DB) porque ESE
+            # sí se trata como "para siempre" — ver el filtro de arriba.
+            cache[name] = {
+                "sell": sell if sell is not None else 0.0,
+                "med48": med48 if med48 is not None else 0.0,
+                "vol48": vol48 if vol48 is not None else 0,
+                "ducats": ducats,
+            }
             save(name, cache[name])
             if i % 20 == 0:
                 print(f"  {i}/{len(missing)}...")
@@ -556,8 +609,11 @@ def build_report(public_token: str, refresh: bool = False) -> dict:
                    for rw in intact)
         ev_r = (sum(rw["chance"] / 100 * sell_of(items, rw["itemName"])
                     for rw in radiant) if radiant else ev_i)
+        # "or 0", no ".get(..., 0)": ducats puede estar presente y ser None
+        # (fetch pendiente de reintentar, ver fetch_ducats) — .get con default
+        # solo cubre la CLAVE ausente, no un valor None ya guardado.
         ev_ducats = sum(rw["chance"] / 100 *
-                        items.get(rw["itemName"], {}).get("ducats", 0)
+                        (items.get(rw["itemName"], {}).get("ducats") or 0)
                         for rw in intact)
         jackpot = max(intact, key=lambda rw: sell_of(items, rw["itemName"]))
         jname = jackpot["itemName"]
@@ -571,7 +627,7 @@ def build_report(public_token: str, refresh: bool = False) -> dict:
             "price": sell_of(items, rw["itemName"]),
             "med48": items.get(rw["itemName"], {}).get("med48", 0),
             "vol48": items.get(rw["itemName"], {}).get("vol48", 0),
-            "ducats": items.get(rw["itemName"], {}).get("ducats", 0),
+            "ducats": items.get(rw["itemName"], {}).get("ducats") or 0,
         } for rw in intact]
         info = wfcd.get(full, {})
         rows.append({

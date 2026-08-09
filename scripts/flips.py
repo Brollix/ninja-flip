@@ -21,22 +21,51 @@ persistente entre una y otra.
 """
 
 import sys
+import threading
 import time
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 import requests
 
 from db import get_conn
 
+# Arbitrario pero fijo, distinto del de warm_reports.py (727270001) — no
+# reusar para otro lock.
+FLIP_SCANNER_LOCK_KEY = 727270002
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 RATE = 0.4
+SCAN_WORKERS = 6    # requests en simultáneo en scan_sets (ver _throttle más abajo)
 MIN_SPREAD = 15     # plat mínimo de ganancia bruta para listar
 MIN_VOL48 = 10      # ventas mínimas en 48h (liquidez)
 
 session = requests.Session()
 session.headers["User-Agent"] = "flip-scanner/1.0"
+
+# Throttle global (no por-thread): antes cada caller hacía time.sleep(RATE)
+# después de su propio request, así que el escaneo entero era estrictamente
+# secuencial — la mayor parte de esos ~3 min era esperar la respuesta de red,
+# no CPU. Acá se separa el espaciado de requests (esto, RATE seg entre
+# *arranques* de request) de la espera de la respuesta: varios threads pueden
+# tener un request en vuelo al mismo tiempo mientras el próximo ya espera su
+# turno, así que el tiempo de red deja de sumarse en serie. La tasa real
+# contra warframe.market no cambia (sigue siendo come máximo 1 request cada
+# RATE seg), solo se deja de perder tiempo esperando de más.
+_throttle_lock = threading.Lock()
+_next_slot = [0.0]
+
+
+def _throttle() -> None:
+    with _throttle_lock:
+        now = time.monotonic()
+        wait = _next_slot[0] - now
+        if wait > 0:
+            time.sleep(wait)
+            now = time.monotonic()
+        _next_slot[0] = now + RATE
 
 
 def market_items():
@@ -54,6 +83,7 @@ def get_json(url: str, tries: int = 3):
     Un escaneo de 8 minutos no puede morir por un request lento.
     """
     for attempt in range(tries):
+        _throttle()
         try:
             r = session.get(url, timeout=30)
             if r.status_code == 429:          # rate limit: esperar y reintentar
@@ -154,7 +184,6 @@ def refresh_hourly_activity() -> None:
             if len(dt) >= 13 and dt[10] == "T":
                 bucket = dt[:13] + ":00:00+00:00"  # trunca a la hora, UTC
                 buckets[bucket] = buckets.get(bucket, 0) + (h.get("volume") or 0)
-        time.sleep(RATE)
         if i % 30 == 0:
             print(f"  {i}/{len(slugs)}...", flush=True)
     if not buckets:
@@ -167,9 +196,17 @@ def refresh_hourly_activity() -> None:
         """, list(buckets.items()))
 
 
-def item_detail(slug: str) -> dict:
+def item_detail(slug: str) -> dict | None:
+    """None = no se pudo confirmar (fallo de red/rate-limit, get_json ya
+    reintentó); {} = la API respondió pero sin datos. Antes ambos casos
+    devolvían {}, indistinguibles de "este item no tiene setParts/maxRank" —
+    eso hacía que un fallo transitorio se guardara como un hecho permanente
+    (rank_known=True con rango 0, o "las partes de este set no cuestan
+    nada")."""
     j = get_json(f"https://api.warframe.market/v2/item/{slug}")
-    return (j or {}).get("data") or {}
+    if j is None:
+        return None
+    return j.get("data") or {}
 
 
 def flip_rank(slug: str, kind: str, entry: dict) -> int:
@@ -183,10 +220,18 @@ def flip_rank(slug: str, kind: str, entry: dict) -> int:
     if kind == "set":
         return 0
     if not entry.get("rank_known"):
-        entry["rank"] = item_detail(slug).get("maxRank") or 0
-        entry["rank_known"] = True
-        time.sleep(RATE)
-    mx = entry["rank"]
+        detail = item_detail(slug)
+        # solo marcamos rank_known (persiste en market_items, nunca se vuelve
+        # a pedir) si REALMENTE confirmamos el maxRank — si item_detail falló
+        # (None), mejor reintentar la próxima corrida que clavar rango 0 para
+        # siempre en un item que en realidad sí rankea.
+        if detail is not None:
+            entry["rank"] = detail.get("maxRank") or 0
+            entry["rank_known"] = True
+    # entry.get, no entry[...]: un item nuevo (cache.setdefault(slug, {}))
+    # cuyo primer item_detail falla no tiene "rank" todavía — sin el default
+    # esto crasheaba el escaneo entero por un solo fetch fallido.
+    mx = entry.get("rank", 0)
     if kind == "arcane":
         return mx                      # arcanos: siempre maxeados
     return mx if mx >= 6 else 0        # primed/rankeables altos: maxeados
@@ -328,28 +373,49 @@ def scan_sets(full: bool = False):
 
     print(f"{'Escaneo completo' if full else 'Refresco rápido'}: "
           f"{len(queue)} de {len(targets)} items "
-          f"(~{len(queue) * RATE * 1.6 / 60:.0f} min). "
+          f"(~{len(queue) * RATE * 1.6 / 60 / SCAN_WORKERS:.0f} min con {SCAN_WORKERS} threads). "
           f"El resto sale del cache.\n", flush=True)
 
     todo = {it["slug"] for it, _ in queue}
-    for i, (it, kind) in enumerate(queue, 1):
+    # entry por slug se crea ACA, en el hilo principal, antes de repartir el
+    # trabajo — cache.setdefault mutando el dict de arriba desde varios
+    # threads a la vez no es seguro; cada entry individual sí es exclusivo de
+    # su slug, así que el worker de abajo puede pisarlo sin lock.
+    for it, _ in queue:
+        cache.setdefault(it["slug"], {})
+
+    done = 0
+    done_lock = threading.Lock()
+
+    def process(item):
+        it, kind = item
         slug = it["slug"]
-        entry = cache.setdefault(slug, {})
+        entry = cache[slug]
         rank = flip_rank(slug, kind, entry)
         buy, sell = top_orders(slug, rank)
-        time.sleep(RATE)
         # el volumen solo si venció el TTL: ahorra la mitad de los requests
         if now - (entry.get("vol_ts") or 0) > VOL_TTL:
             entry["vol48"] = volume48(slug, rank)
             entry["vol_ts"] = now
-            time.sleep(RATE)
         entry.update({
             "name": it["i18n"]["en"]["name"], "kind": kind, "rank": rank,
             "buy": buy or 0, "sell": sell or 0, "price_ts": now,
         })
-        if i % 25 == 0:
-            print(f"  {i}/{len(queue)}...", flush=True)
+        nonlocal done
+        with done_lock:
+            done += 1
+            n = done
+        if n % 25 == 0:
+            print(f"  {n}/{len(queue)}...", flush=True)
             save_item_cache(cache)
+
+    # SCAN_WORKERS threads en vuelo: el cuello de botella real es la latencia
+    # de red esperando cada respuesta, no CPU ni el rate limit en sí (_throttle
+    # sigue espaciando los *arranques* de request a RATE seg, sea 1 thread o
+    # varios) — con varios requests en simultáneo esa espera deja de sumarse
+    # en serie y el wall-clock del Job (lo que se cobra) baja bastante.
+    with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
+        list(pool.map(process, queue))
 
     save_item_cache(cache)
 
@@ -394,19 +460,27 @@ def save_parts(rows: list) -> None:
 
 
 def parts_arbitrage(row, id_to_slug):
-    """Suma del precio de las partes sueltas vs precio del set."""
+    """Suma del precio de las partes sueltas vs precio del set.
+
+    (None, None) = no se pudo confirmar — antes, si item_detail(row["slug"])
+    fallaba (fetch caído), devolvía {} y este loop nunca corría: el caller
+    interpretaba (0.0, "") como "las partes de este set salen gratis" y lo
+    marcaba con ★ como arbitraje "instantáneo", mostrándole al usuario una
+    oportunidad que en realidad era solo un request fallido.
+    """
     detail = item_detail(row["slug"])
-    time.sleep(RATE)
+    if detail is None:
+        return None, None
     total, detail_txt = 0.0, []
     for pid in detail.get("setParts", []):
         pslug = id_to_slug.get(pid)
         if not pslug or pslug == row["slug"]:
             continue
         pdetail = item_detail(pslug)
-        time.sleep(RATE)
+        if pdetail is None:
+            return None, None
         qty = pdetail.get("quantityInSet", 1) or 1
         _, psell = top_orders(pslug)
-        time.sleep(RATE)
         if psell is None:
             return None, None
         total += psell * qty
@@ -416,15 +490,47 @@ def parts_arbitrage(row, id_to_slug):
 
 
 def main():
+    # Cloud Scheduler dispara este Job cada 10 min (ver infra/scheduler.tf)
+    # sin ninguna protección propia contra superposición — un escaneo lento
+    # (o un --full de más de 10 min) puede seguir corriendo cuando el
+    # scheduler ya arrancó el siguiente. Dos corridas en paralelo pisándose
+    # en el DELETE+INSERT de hourly_activity (scan_sets) o duplicando el rate
+    # contra warframe.market justo cuando más importa no hacerlo. Mismo
+    # patrón de lock que warm_reports.py — ver el comentario ahí sobre por
+    # qué tiene que ser pg_try_advisory_XACT_lock (no de sesión) con el
+    # pooler de Neon en modo transacción.
+    lock_conn = get_conn()
+    with lock_conn.transaction():
+        with lock_conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_xact_lock(%s)", (FLIP_SCANNER_LOCK_KEY,))
+            acquired = cur.fetchone()[0]
+        if not acquired:
+            print("flip-scanner ya está corriendo (lock ocupado), salgo.", flush=True)
+            lock_conn.close()
+            return
+        _run_scan()
+    lock_conn.close()  # cierra la transacción (commit) -> libera el xact lock
+
+
+PARTS_INTERVAL_MIN = 30  # el arbitraje de partes solo corre 1 de cada 3 refrescos automáticos
+
+
+def _run_scan():
+    full = "--full" in sys.argv
     # 20 por corrida (~7 requests c/u = ~140, a RATE=0.4s ≈ 1min extra) — entra
-    # cómodo en el timeout de 600s del Job y se recalcula solo cada 10 min.
-    # --parts N lo pisa para pruebas manuales; --parts 0 lo apaga del todo.
+    # cómodo en el timeout de 600s del Job. --parts N lo pisa para pruebas
+    # manuales; --parts 0 lo apaga del todo.
     n_parts = 20
     if "--parts" in sys.argv:
         idx = sys.argv.index("--parts")
         n_parts = int(sys.argv[idx + 1]) if len(sys.argv) > idx + 1 else 8
+    elif not full and datetime.now(timezone.utc).minute % PARTS_INTERVAL_MIN != 0:
+        # el precio de las partes no se mueve tan rápido como para pagar
+        # ~1 min extra (~140 requests) en CADA corrida de 10 min — solo se
+        # recalcula en :00/:30 UTC (ver scheduler.tf, cron */10).
+        n_parts = 0
 
-    rows = scan_sets(full="--full" in sys.argv)
+    rows = scan_sets(full=full)
     # el JSON guarda todo lo líquido (el sniper usa filas sin comprador in-game);
     # el ranking de abajo solo cuenta flips con comprador Y vendedor reales.
     # Orden por "score" (margen % × liquidez × log(spread)), no por spread
