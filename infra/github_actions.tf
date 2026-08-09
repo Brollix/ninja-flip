@@ -51,6 +51,32 @@ resource "google_cloud_run_v2_job_iam_member" "github_deployer_updates_report_wa
   member   = "serviceAccount:${google_service_account.github_deployer.email}"
 }
 
+# run.developer alcanza para actualizar la revisión, pero Cloud Run también
+# exige que quien hace el deploy pueda "actuar como" la identidad de runtime
+# que va a correr esa revisión (iam.serviceaccounts.actAs) — sin esto el
+# deploy tira PERMISSION_DENIED aunque el rol de arriba esté bien. Un binding
+# por cada SA de runtime que este deployer efectivamente usa: "web" (service
+# web), "report" (services report + report-warmer, comparten SA), "scanner"
+# (Job flip-scanner). Nombres literales, no resource — mismo motivo que el
+# resto de este archivo.
+resource "google_service_account_iam_member" "github_deployer_actas_web" {
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${var.app_name}-web@${var.project_id}.iam.gserviceaccount.com"
+  role                = "roles/iam.serviceAccountUser"
+  member              = "serviceAccount:${google_service_account.github_deployer.email}"
+}
+
+resource "google_service_account_iam_member" "github_deployer_actas_report" {
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${var.app_name}-report@${var.project_id}.iam.gserviceaccount.com"
+  role                = "roles/iam.serviceAccountUser"
+  member              = "serviceAccount:${google_service_account.github_deployer.email}"
+}
+
+resource "google_service_account_iam_member" "github_deployer_actas_scanner" {
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${var.app_name}-scanner@${var.project_id}.iam.gserviceaccount.com"
+  role                = "roles/iam.serviceAccountUser"
+  member              = "serviceAccount:${google_service_account.github_deployer.email}"
+}
+
 # ---------------------------------------------------------------------------
 # Workload Identity Federation: GitHub Actions se autentica sin ninguna key
 # de larga duración (bloqueadas por policy de organización,
