@@ -1,4 +1,4 @@
-import { wfmFetch } from "./lib";
+import { wfmFetch, prettyItemName } from "./lib";
 
 // Cliente autenticado de warframe.market (vía el proxy /wfm del dev server).
 // El JWT vive en localStorage de TU navegador; las credenciales viajan
@@ -391,7 +391,7 @@ export function getDetectedFlips(): FlipRecord[] {
 export function getAllFlips(): FlipRecord[] {
   const flips = getFlips();
   const detected = getDetectedFlips().filter(d =>
-    !flips.some(f => f.item === d.item && Math.abs(f.sell - d.sell) <= 1));
+    !flips.some(f => prettyItemName(f.item) === prettyItemName(d.item) && Math.abs(f.sell - d.sell) <= 1));
   return [...flips, ...detected];
 }
 
