@@ -4,7 +4,7 @@ nunca encuentran un cache frío al entrar, sin recalcular a TODO el mundo en
 cada corrida (eso no escala: con 1000 usuarios, la mayoría ya está fresca
 en cualquier corrida dada, reprocesarlos a todos igual sería tiempo tirado).
 
-Corre como el Cloud Run Job "report-warmer" (ver infra/), cada 10 min,
+Corre como el Cloud Run Job "report-warmer" (ver infra/), cada 20 min,
 reusando la MISMA imagen que el servicio "report" (scripts/Dockerfile.report)
 con un command distinto — no hace falta un Dockerfile aparte.
 """
@@ -18,7 +18,11 @@ from report_server import REPORT_TTL_SECONDS, generate_and_save_report
 # umbral de "necesita refresco" se calcula contra esto, no contra el TTL
 # entero, para garantizar al menos un ciclo de margen antes de que
 # report_server.py encuentre el cache vencido on-demand.
-JOB_INTERVAL_SECONDS = 10 * 60
+# Tiene que coincidir con el cron real de infra/scheduler.tf (report_warmer_
+# trigger) — si se desalinean, el margen calculado abajo se achica o se
+# vuelve negativo (con TTL chico y este valor grande, "amenaza con refrescar
+# a todos en cada corrida" en vez de solo a los que están por vencer).
+JOB_INTERVAL_SECONDS = 20 * 60
 SAFETY_MARGIN_SECONDS = 2 * 60  # una corrida lenta no debe dejar pasar el TTL
 
 # AlecaFrame no documenta rate limit en ningún lado del repo (ni aleca.py ni
@@ -27,7 +31,7 @@ SAFETY_MARGIN_SECONDS = 2 * 60  # una corrida lenta no debe dejar pasar el TTL
 MAX_WORKERS = 5
 
 # Arbitrario pero fijo — no reusar para otro lock. Evita que dos ejecuciones
-# de este Job se pisen si una corrida tarda más que el intervalo de 10 min.
+# de este Job se pisen si una corrida tarda más que el intervalo de 20 min.
 REPORT_WARMER_LOCK_KEY = 727270001
 
 

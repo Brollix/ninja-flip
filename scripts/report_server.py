@@ -25,7 +25,12 @@ from relic_analysis import build_report
 
 app = Flask(__name__)
 
-REPORT_TTL_SECONDS = int(os.environ.get("REPORT_TTL_SECONDS", 25 * 60))
+# 50 min, no 25 — el warmer (scripts/warm_reports.py) ahora corre cada 20 min
+# (antes 10), así que este TTL necesita margen de sobra por encima de ese
+# intervalo para que get_stale_users() siga distinguiendo "recién
+# refrescado" de "por vencer" en vez de creer que todos están por vencer en
+# cada corrida (ver el comentario de JOB_INTERVAL_SECONDS ahí).
+REPORT_TTL_SECONDS = int(os.environ.get("REPORT_TTL_SECONDS", 50 * 60))
 
 
 @app.get("/healthz")

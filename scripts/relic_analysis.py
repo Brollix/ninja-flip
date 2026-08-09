@@ -23,7 +23,9 @@ import json
 import os
 import struct
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -46,6 +48,25 @@ CACHE_DIR = ROOT / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
 PRICE_CACHE_HOURS = 12
 RATE = 0.35  # rate limit warframe.market
+FETCH_WORKERS = 4  # requests en simultáneo en get_item_data/get_relic_prices
+
+# Throttle global (no por-thread) — mismo patrón que flips.py: separa el
+# espaciado de *arranques* de request (esto, RATE seg) de la espera de la
+# respuesta, así varios threads pueden tener un request en vuelo a la vez
+# sin que el tiempo de red se sume en serie. La tasa real contra
+# warframe.market no cambia (sigue como máximo 1 request cada RATE seg).
+_throttle_lock = threading.Lock()
+_next_slot = [0.0]
+
+
+def _throttle() -> None:
+    with _throttle_lock:
+        now = time.monotonic()
+        wait = _next_slot[0] - now
+        if wait > 0:
+            time.sleep(wait)
+            now = time.monotonic()
+        _next_slot[0] = now + RATE
 
 RELIC_TIERS = {0: "Lith", 1: "Meso", 2: "Neo", 3: "Axi", 4: "Requiem"}
 # El backend usa 0-6; 1-3 y 4-6 son ambos Exceptional/Flawless/Radiant
@@ -110,6 +131,29 @@ def get_player_stats(public_token: str) -> dict:
 
 # ---------- fuentes externas ----------
 
+# Cache en memoria del PROCESO (no Postgres) — el service "report" es de
+# larga vida, pero build_report() llamaba a load_drop_tables()/
+# load_market_items()/load_wfcd_relics() UNA VEZ POR USUARIO, y cada una hacía
+# su propio round-trip a Postgres + json.loads de un payload grande (drops,
+# catálogo completo de items, relics de WFCD) vía cached_json_pg — aunque el
+# resultado es idéntico para todos los usuarios y esos datos cambian una vez
+# por semana como mucho. TTL corto a propósito (no necesita igualar el TTL
+# de 7 días de cached_json_pg): solo evita repetir el trabajo entre reportes
+# consecutivos mientras la instancia sigue viva.
+_PROCESS_CACHE_TTL_S = 3600
+_process_cache: dict = {}
+
+
+def _process_cached(key: str, loader):
+    entry = _process_cache.get(key)
+    now = time.time()
+    if entry and entry[0] > now:
+        return entry[1]
+    value = loader()
+    _process_cache[key] = (now + _PROCESS_CACHE_TTL_S, value)
+    return value
+
+
 def cached_json_pg(cache_key: str, url: str, max_age_h: float):
     """Igual contrato que el viejo cached_json() (clave -> blob JSON, TTL en
     horas), pero cacheado en Postgres (external_data_cache) en vez de un
@@ -139,27 +183,31 @@ def cached_json_pg(cache_key: str, url: str, max_age_h: float):
 
 def load_drop_tables() -> dict:
     """{(tier, name, refinement): [{itemName, chance}]}"""
-    data = cached_json_pg("relic_drops",
-                          "https://drops.warframestat.us/data/relics.json", 24 * 7)
-    tables = {}
-    for rel in data["relics"]:
-        if not all(k in rel for k in ("tier", "relicName", "state", "rewards")):
-            continue
-        tables[(rel["tier"], rel["relicName"], rel["state"])] = rel["rewards"]
-    return tables
+    def _load():
+        data = cached_json_pg("relic_drops",
+                              "https://drops.warframestat.us/data/relics.json", 24 * 7)
+        tables = {}
+        for rel in data["relics"]:
+            if not all(k in rel for k in ("tier", "relicName", "state", "rewards")):
+                continue
+            tables[(rel["tier"], rel["relicName"], rel["state"])] = rel["rewards"]
+        return tables
+    return _process_cached("drop_tables", _load)
 
 
 def load_market_items():
     """(name_lower -> slug, gameRef -> name) de warframe.market."""
-    data = cached_json_pg("market_items",
-                          "https://api.warframe.market/v2/items", 24 * 7)
-    by_name, by_ref = {}, {}
-    for it in data["data"]:
-        name = it["i18n"]["en"]["name"]
-        by_name[name.lower()] = it["slug"]
-        if it.get("gameRef"):
-            by_ref[it["gameRef"]] = name
-    return by_name, by_ref
+    def _load():
+        data = cached_json_pg("market_items",
+                              "https://api.warframe.market/v2/items", 24 * 7)
+        by_name, by_ref = {}, {}
+        for it in data["data"]:
+            name = it["i18n"]["en"]["name"]
+            by_name[name.lower()] = it["slug"]
+            if it.get("gameRef"):
+                by_ref[it["gameRef"]] = name
+        return by_name, by_ref
+    return _process_cached("market_items_by_name_ref", _load)
 
 
 def resolve_ref(raw_ref: str, by_ref: dict) -> str | None:
@@ -180,24 +228,26 @@ def resolve_ref(raw_ref: str, by_ref: dict) -> str | None:
 
 def load_wfcd_relics() -> dict:
     """{'Meso D3': {vaulted, farm, farm_chance}} desde WFCD warframe-items."""
-    data = cached_json_pg(
-        "wfcd_relics",
-        "https://raw.githubusercontent.com/WFCD/warframe-items/master/data/json/Relics.json",
-        24 * 7)
-    out = {}
-    for r in data:
-        name = r.get("name", "")
-        if not name.endswith(" Intact"):
-            continue
-        base = name[:-len(" Intact")]
-        best = max(r.get("drops") or [], key=lambda d: d.get("chance", 0),
-                   default=None)
-        out[base] = {
-            "vaulted": bool(r.get("vaulted", False)),
-            "farm": best["location"] if best else None,
-            "farm_chance": round(best["chance"], 2) if best else None,
-        }
-    return out
+    def _load():
+        data = cached_json_pg(
+            "wfcd_relics",
+            "https://raw.githubusercontent.com/WFCD/warframe-items/master/data/json/Relics.json",
+            24 * 7)
+        out = {}
+        for r in data:
+            name = r.get("name", "")
+            if not name.endswith(" Intact"):
+                continue
+            base = name[:-len(" Intact")]
+            best = max(r.get("drops") or [], key=lambda d: d.get("chance", 0),
+                       default=None)
+            out[base] = {
+                "vaulted": bool(r.get("vaulted", False)),
+                "farm": best["location"] if best else None,
+                "farm_chance": round(best["chance"], 2) if best else None,
+            }
+        return out
+    return _process_cached("wfcd_relics", _load)
 
 
 def normalize(name: str) -> str:
@@ -214,8 +264,14 @@ def get_json_retry(url: str, tries: int = 3):
     """GET tolerante: reintenta 429/timeouts antes de rendirse, devuelve None
     si no hay caso — mismo patrón que flips.py:get_json. Sin esto, un solo
     429 pasajero se guardaba como un CERO real en el cache compartido de 12h
-    (o, para ducados, para siempre — ver fetch_ducats)."""
+    (o, para ducados, para siempre — ver fetch_ducats).
+
+    _throttle() acá (no un time.sleep(RATE) en cada caller) es lo que permite
+    paralelizar get_item_data/get_relic_prices sin subir la tasa real contra
+    warframe.market — varios threads pueden tener un request en vuelo, pero
+    los ARRANQUES siguen espaciados a RATE seg por este único gate."""
     for attempt in range(tries):
+        _throttle()
         try:
             r = session.get(url, timeout=30)
             if r.status_code == 429:
@@ -270,6 +326,22 @@ def fetch_ducats(slug: str) -> int | None:
     return body["data"].get("ducats") or 0
 
 
+def _save_item_price_batch(rows: list) -> None:
+    """rows: [(name, entry), ...]. Conexión propia y de corta vida — a
+    propósito separada de la lectura inicial de get_item_data(), que ya
+    cerró su conexión antes de repartir el trabajo de red entre threads."""
+    if not rows:
+        return
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.executemany("""
+            INSERT INTO item_price_cache (name, sell, med48, vol48, ducats, updated_at)
+            VALUES (%s, %s, %s, %s, %s, now())
+            ON CONFLICT (name) DO UPDATE SET
+              sell = EXCLUDED.sell, med48 = EXCLUDED.med48, vol48 = EXCLUDED.vol48,
+              ducats = EXCLUDED.ducats, updated_at = now()
+        """, [(name, e["sell"], e["med48"], e["vol48"], e["ducats"]) for name, e in rows])
+
+
 def get_item_data(item_names: set, by_name: dict, refresh: bool) -> dict:
     """{name: {sell, med48, vol48, ducats}} — cache compartido en Postgres
     (item_price_cache, TTL 12h vía updated_at), no un JSON local: estos
@@ -288,9 +360,9 @@ def get_item_data(item_names: set, by_name: dict, refresh: bool) -> dict:
 
         missing = [n for n in sorted(item_names) if n not in cache]
         if missing:
-            mins = len(missing) * RATE * 2.2 / 60
+            mins = len(missing) * RATE * 2.2 / 60 / FETCH_WORKERS
             print(f"Bajando datos de {len(missing)} items de warframe.market "
-                  f"(~{mins:.0f} min)...")
+                  f"(~{mins:.0f} min con {FETCH_WORKERS} threads)...")
 
         # ducados: se cachean para siempre (no cambian) — leemos lo que haya
         # aunque esté vencido el resto del TTL, para no re-pedirlos de más.
@@ -300,44 +372,68 @@ def get_item_data(item_names: set, by_name: dict, refresh: bool) -> dict:
         cur.execute("SELECT name, ducats FROM item_price_cache WHERE name = ANY(%s) AND ducats IS NOT NULL",
                     (missing,))
         known_ducats = dict(cur.fetchall())
+    # conexión cerrada ACA a propósito — el resto son requests de red
+    # repartidos entre threads, un cursor de psycopg no es seguro para usar
+    # desde varios threads a la vez.
 
-        def save(name: str, entry: dict):
-            cur.execute("""
-                INSERT INTO item_price_cache (name, sell, med48, vol48, ducats, updated_at)
-                VALUES (%s, %s, %s, %s, %s, now())
-                ON CONFLICT (name) DO UPDATE SET
-                  sell = EXCLUDED.sell, med48 = EXCLUDED.med48, vol48 = EXCLUDED.vol48,
-                  ducats = EXCLUDED.ducats, updated_at = now()
-            """, (name, entry["sell"], entry["med48"], entry["vol48"], entry["ducats"]))
+    if not missing:
+        return cache
 
-        for i, name in enumerate(missing, 1):
-            slug = by_name.get(normalize(name).lower())
-            if not slug or "forma" in name.lower():
-                cache[name] = {"sell": 0.0, "med48": 0.0, "vol48": 0, "ducats": 0}
-                save(name, cache[name])
-                continue
+    lock = threading.Lock()
+    buffer: list = []
+    done = 0
+
+    def fetch_one(name: str):
+        slug = by_name.get(normalize(name).lower())
+        if not slug or "forma" in name.lower():
+            entry = {"sell": 0.0, "med48": 0.0, "vol48": 0, "ducats": 0}
+        else:
             sell = fetch_sell_price(slug)
-            time.sleep(RATE)
             med48, vol48 = fetch_closed_stats(slug)
-            time.sleep(RATE)
             ducats = known_ducats.get(name)
             if ducats is None:
                 ducats = fetch_ducats(slug)
-                time.sleep(RATE)
             # sell/med48/vol48 SÍ pueden guardarse en 0 en un fallo — tienen
             # TTL de 12h, se autocorrigen solos en el próximo refresh. ducats
             # se guarda tal cual (puede ser None -> NULL en la DB) porque ESE
             # sí se trata como "para siempre" — ver el filtro de arriba.
-            cache[name] = {
+            entry = {
                 "sell": sell if sell is not None else 0.0,
                 "med48": med48 if med48 is not None else 0.0,
                 "vol48": vol48 if vol48 is not None else 0,
                 "ducats": ducats,
             }
-            save(name, cache[name])
-            if i % 20 == 0:
-                print(f"  {i}/{len(missing)}...")
+        cache[name] = entry
+        nonlocal done
+        to_flush = None
+        with lock:
+            done += 1
+            n = done
+            buffer.append((name, entry))
+            # checkpoint cada 20 (o al final) — si algo interrumpe la corrida
+            # a mitad de camino, lo ya fetchado no se pierde. No hace falta
+            # más granularidad: son requests de red, no CPU, el riesgo real
+            # es un timeout del Job/service entero, no un crash puntual.
+            if n % 20 == 0 or n == len(missing):
+                to_flush, buffer[:] = list(buffer), []
+        if to_flush:
+            print(f"  {n}/{len(missing)}...")
+            _save_item_price_batch(to_flush)
+
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+        list(pool.map(fetch_one, missing))
     return cache
+
+
+def _save_relic_price_batch(rows: list) -> None:
+    if not rows:
+        return
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.executemany("""
+            INSERT INTO relic_price_cache (relic_full, price, updated_at)
+            VALUES (%s, %s, now())
+            ON CONFLICT (relic_full) DO UPDATE SET price = EXCLUDED.price, updated_at = now()
+        """, rows)
 
 
 def get_relic_prices(relic_names: list, by_name: dict, refresh: bool) -> dict:
@@ -355,19 +451,36 @@ def get_relic_prices(relic_names: list, by_name: dict, refresh: bool) -> dict:
         missing = [n for n in relic_names if n not in cache]
         if missing:
             print(f"Bajando precios de {len(missing)} reliquias enteras "
-                  f"(~{len(missing) * RATE / 60:.0f} min)...")
-        for i, full in enumerate(missing, 1):
-            slug = by_name.get(f"{full.lower()} relic")
-            price = fetch_sell_price(slug) if slug else 0.0
-            cache[full] = price
-            cur.execute("""
-                INSERT INTO relic_price_cache (relic_full, price, updated_at)
-                VALUES (%s, %s, now())
-                ON CONFLICT (relic_full) DO UPDATE SET price = EXCLUDED.price, updated_at = now()
-            """, (full, price))
-            time.sleep(RATE)
-            if i % 30 == 0:
-                print(f"  {i}/{len(missing)}...")
+                  f"(~{len(missing) * RATE / 60 / FETCH_WORKERS:.0f} min con {FETCH_WORKERS} threads)...")
+    # misma razón que en get_item_data: conexión cerrada antes de paralelizar
+    # las requests de red entre threads.
+
+    if not missing:
+        return cache
+
+    lock = threading.Lock()
+    buffer: list = []
+    done = 0
+
+    def fetch_one(full: str):
+        slug = by_name.get(f"{full.lower()} relic")
+        price = fetch_sell_price(slug) if slug else 0.0
+        price = price if price is not None else 0.0
+        cache[full] = price
+        nonlocal done
+        to_flush = None
+        with lock:
+            done += 1
+            n = done
+            buffer.append((full, price))
+            if n % 30 == 0 or n == len(missing):
+                to_flush, buffer[:] = list(buffer), []
+        if to_flush:
+            print(f"  {n}/{len(missing)}...")
+            _save_relic_price_batch(to_flush)
+
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+        list(pool.map(fetch_one, missing))
     return cache
 
 

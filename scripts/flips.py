@@ -14,7 +14,7 @@ Uso:
     python scripts/flips.py --parts N   -> además arbitraje partes→set de los top N
 
 Corre como el Cloud Run Job "flip-scanner" (ver infra/), disparado por Cloud
-Scheduler cada 10 min en modo refresco rápido. El cache de trabajo (buy/sell/
+Scheduler cada 15 min en modo refresco rápido. El cache de trabajo (buy/sell/
 vol48/rank por item) vive en Postgres (tabla market_items, Neon) en vez de un
 JSON local — un Job de Cloud Run es un container nuevo cada corrida, sin disco
 persistente entre una y otra.
@@ -274,11 +274,20 @@ def load_item_cache() -> dict:
         return {row[0]: dict(zip(cols, row)) for row in cur.fetchall()}
 
 
-def save_item_cache(cache: dict) -> None:
+def save_item_cache(cache: dict, slugs=None) -> None:
+    """slugs=None (default) upsertea TODO el cache — lo sigue usando el save
+    final de scan_sets. Los checkpoints periódicos pasan solo los slugs
+    tocados desde el checkpoint anterior (ver `dirty` en scan_sets): sin
+    esto, cada checkpoint reescribía las ~390 filas completas del cache
+    aunque el 90%+ no cambió nada en esta corrida."""
     if not cache:
         return
+    keys = cache.keys() if slugs is None else slugs
     rows = []
-    for slug, e in cache.items():
+    for slug in keys:
+        e = cache.get(slug)
+        if not e:
+            continue
         buy, sell, vol48 = e.get("buy") or 0, e.get("sell") or 0, e.get("vol48") or 0
         margin = (sell - buy) / sell * 100 if sell > buy > 0 or (sell > 0 and buy == 0) else 0
         score = flip_score(margin, vol48, max(sell - buy, 0)) if sell > 0 else 0
@@ -287,6 +296,8 @@ def save_item_cache(cache: dict) -> None:
             bool(e.get("rank_known")), buy, sell, vol48, score,
             e.get("price_ts"), e.get("vol_ts"),
         ))
+    if not rows:
+        return
     with get_conn() as conn, conn.cursor() as cur:
         cur.executemany("""
             INSERT INTO market_items (slug, name, kind, rank, rank_known, buy, sell, vol48, score, price_ts, vol_ts, updated_at)
@@ -347,8 +358,7 @@ def interest(entry: dict) -> float:
 STALE_AGE = 3 * 3600  # ningún item cacheado debería superar esto sin recotizarse
 
 
-def scan_sets(full: bool = False):
-    targets = pick_targets()
+def scan_sets(targets: list, full: bool = False):
     cache = load_item_cache()
     now = time.time()
 
@@ -386,6 +396,10 @@ def scan_sets(full: bool = False):
 
     done = 0
     done_lock = threading.Lock()
+    # slugs tocados desde el último checkpoint — antes cada checkpoint
+    # reescribía el cache ENTERO (~390 filas) aunque solo `queue` (a veces
+    # 120 o menos) cambió algo en esta corrida.
+    dirty: set = set()
 
     def process(item):
         it, kind = item
@@ -402,12 +416,17 @@ def scan_sets(full: bool = False):
             "buy": buy or 0, "sell": sell or 0, "price_ts": now,
         })
         nonlocal done
+        to_save = None
         with done_lock:
             done += 1
             n = done
-        if n % 25 == 0:
+            dirty.add(slug)
+            if n % 25 == 0:
+                to_save = set(dirty)
+                dirty.clear()
+        if to_save:
             print(f"  {n}/{len(queue)}...", flush=True)
-            save_item_cache(cache)
+            save_item_cache(cache, to_save)
 
     # SCAN_WORKERS threads en vuelo: el cuello de botella real es la latencia
     # de red esperando cada respuesta, no CPU ni el rate limit en sí (_throttle
@@ -417,7 +436,9 @@ def scan_sets(full: bool = False):
     with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
         list(pool.map(process, queue))
 
-    save_item_cache(cache)
+    # lo que quedó sin guardar desde el último checkpoint (no hace falta
+    # correr sobre TODO el cache: solo `dirty` cambió en esta corrida)
+    save_item_cache(cache, dirty)
 
     # armamos las filas con todo el cache (fresco + lo que no se re-cotizó)
     rows = []
@@ -490,9 +511,9 @@ def parts_arbitrage(row, id_to_slug):
 
 
 def main():
-    # Cloud Scheduler dispara este Job cada 10 min (ver infra/scheduler.tf)
+    # Cloud Scheduler dispara este Job cada 15 min (ver infra/scheduler.tf)
     # sin ninguna protección propia contra superposición — un escaneo lento
-    # (o un --full de más de 10 min) puede seguir corriendo cuando el
+    # (o un --full de más de 15 min) puede seguir corriendo cuando el
     # scheduler ya arrancó el siguiente. Dos corridas en paralelo pisándose
     # en el DELETE+INSERT de hourly_activity (scan_sets) o duplicando el rate
     # contra warframe.market justo cuando más importa no hacerlo. Mismo
@@ -526,11 +547,12 @@ def _run_scan():
         n_parts = int(sys.argv[idx + 1]) if len(sys.argv) > idx + 1 else 8
     elif not full and datetime.now(timezone.utc).minute % PARTS_INTERVAL_MIN != 0:
         # el precio de las partes no se mueve tan rápido como para pagar
-        # ~1 min extra (~140 requests) en CADA corrida de 10 min — solo se
-        # recalcula en :00/:30 UTC (ver scheduler.tf, cron */10).
+        # ~1 min extra (~140 requests) en CADA corrida de 15 min — solo se
+        # recalcula en :00/:30 UTC (ver scheduler.tf, cron */15).
         n_parts = 0
 
-    rows = scan_sets(full=full)
+    targets = pick_targets()
+    rows = scan_sets(targets, full=full)
     # el JSON guarda todo lo líquido (el sniper usa filas sin comprador in-game);
     # el ranking de abajo solo cuenta flips con comprador Y vendedor reales.
     # Orden por "score" (margen % × liquidez × log(spread)), no por spread
@@ -554,7 +576,10 @@ def _run_scan():
     parts_rows = [x for x in two_sided if x["kind"] == "set"][:n_parts]
     if parts_rows:
         print(f"\nArbitraje partes→set para los top {n_parts} (comprar partes, vender set):")
-        id_to_slug = {it["id"]: it["slug"] for it in market_items()}
+        # reusa `targets` (ya en memoria) en vez de volver a pedir el catálogo
+        # completo — market_items() es el payload más grande del escaneo,
+        # no hace falta bajarlo dos veces por corrida.
+        id_to_slug = {it["id"]: it["slug"] for it, _ in targets}
         for r in parts_rows:
             total, txt = parts_arbitrage(r, id_to_slug)
             if total is None:
