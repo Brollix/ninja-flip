@@ -11,6 +11,28 @@
 # google_cloud_run_v2_service.web.name) encadenaría cualquier cambio/drift
 # pendiente de ESE recurso a este apply, y este archivo solo debe tocar IAM.
 
+# roles/run.developer alcanza de sobra, pero de más: también deja crear/
+# borrar services/Jobs, cambiar domain mappings, tocar IAM del propio
+# recurso (getIamPolicy/setIamPolicy). Este rol custom se queda solo con lo
+# que .github/workflows/deploy.yml efectivamente necesita — actualizar la
+# imagen de algo que YA existe.
+resource "google_project_iam_custom_role" "run_image_deployer" {
+  project     = var.project_id
+  role_id     = "runImageDeployer"
+  title       = "Cloud Run image deployer (CI)"
+  description = "Actualiza la imagen de Cloud Run services/Jobs ya existentes — sin crear/borrar recursos ni tocar su IAM."
+  permissions = [
+    "run.services.get",
+    "run.services.update",
+    "run.jobs.get",
+    "run.jobs.update",
+    "run.revisions.get",
+    "run.revisions.list",
+    "run.operations.get",
+    "run.operations.list",
+  ]
+}
+
 resource "google_artifact_registry_repository_iam_member" "github_deployer_pushes_images" {
   project    = var.project_id
   location   = var.region
@@ -23,7 +45,7 @@ resource "google_cloud_run_v2_service_iam_member" "github_deployer_updates_web" 
   project  = var.project_id
   location = var.region
   name     = "${var.app_name}-web"
-  role     = "roles/run.developer"
+  role     = google_project_iam_custom_role.run_image_deployer.id
   member   = "serviceAccount:${google_service_account.github_deployer.email}"
 }
 
@@ -31,7 +53,7 @@ resource "google_cloud_run_v2_service_iam_member" "github_deployer_updates_repor
   project  = var.project_id
   location = var.region
   name     = "${var.app_name}-report"
-  role     = "roles/run.developer"
+  role     = google_project_iam_custom_role.run_image_deployer.id
   member   = "serviceAccount:${google_service_account.github_deployer.email}"
 }
 
@@ -39,7 +61,7 @@ resource "google_cloud_run_v2_job_iam_member" "github_deployer_updates_flip_scan
   project  = var.project_id
   location = var.region
   name     = "${var.app_name}-flip-scanner"
-  role     = "roles/run.developer"
+  role     = google_project_iam_custom_role.run_image_deployer.id
   member   = "serviceAccount:${google_service_account.github_deployer.email}"
 }
 
@@ -47,7 +69,7 @@ resource "google_cloud_run_v2_job_iam_member" "github_deployer_updates_report_wa
   project  = var.project_id
   location = var.region
   name     = "${var.app_name}-report-warmer"
-  role     = "roles/run.developer"
+  role     = google_project_iam_custom_role.run_image_deployer.id
   member   = "serviceAccount:${google_service_account.github_deployer.email}"
 }
 
