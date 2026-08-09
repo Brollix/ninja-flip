@@ -17,11 +17,16 @@ resource "google_cloud_run_v2_service" "report" {
     # usuario nuevo sin nada cacheado todavía.
     timeout = "540s"
 
-    # ver la misma nota en cloud_run_web.tf: 1 instancia siempre viva evita
-    # el cold start (Python/Flask + conexión a Postgres) en la primera visita
-    # después de un rato sin tráfico.
+    # A diferencia de "web" (público, la nota de min_instance_count=1 sigue
+    # aplicando ahí), a este servicio solo lo llama "web" server-to-server y
+    # report-warmer cada 10 min (ver cloud_run_report_warmer.tf) — ese mismo
+    # tráfico periódico ya lo mantiene tibio casi todo el tiempo sin pagar
+    # una instancia 24/7. El costo de un cold start ocasional (usuario nuevo
+    # pidiendo su primer reporte justo después de una ventana sin tráfico)
+    # es aceptable para esta escala; antes esto costaba ~$10-13/mes de más
+    # sin beneficio real.
     scaling {
-      min_instance_count = 1
+      min_instance_count = 0
       max_instance_count = 20
     }
 
