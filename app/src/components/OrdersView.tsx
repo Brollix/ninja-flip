@@ -433,7 +433,11 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
 }) {
   const [user, setUser] = useState(
     () => localStorage.getItem("wfm_user") ?? defaultUser.toLowerCase());
-  const cached = readCache();
+  // useState perezoso, no una llamada directa — readCache() hace un
+  // localStorage.getItem + JSON.parse; llamarlo en el cuerpo del componente
+  // lo repetía en CADA render (este componente re-renderiza cada segundo por
+  // el countdown de auto-refresh) aunque el resultado solo se use al montar.
+  const [cached] = useState(() => readCache());
   const [orders, setOrders] = useState<CheckedOrder[] | null>(cached?.orders ?? null);
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
   const [progress, setProgress] = useState("");
@@ -949,6 +953,7 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
   // nuevo logueado (SoldDialog) o alguno restaurado por refresh().
   const allFlips = useMemo(() => getAllFlips(), [orders]);
   const realized = allFlips.reduce((a, f) => a + (f.sell - f.buy), 0);
+  const avgFlipProfit = allFlips.length ? realized / allFlips.length : 0;
 
   const sortedFlips = [...allFlips].sort((a, b) => b.ts - a.ts);
 
@@ -1087,6 +1092,10 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
           <Tile value={bad ? <span className="loss">{bad}</span> : "0"} label="out of position" />
           <Tile value={<span className={realized >= 0 ? "gain-pos" : "loss"}><Plat value={realized} sign /></span>}
                 label={`realized profit (${allFlips.length} flip${allFlips.length === 1 ? "" : "s"})`} />
+          {allFlips.length > 0 && (
+            <Tile value={<span className={avgFlipProfit >= 0 ? "gain-pos" : "loss"}><Plat value={avgFlipProfit} sign /></span>}
+                  label="avg profit per flip" />
+          )}
         </div>
       )}
     </div>
