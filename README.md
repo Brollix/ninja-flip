@@ -5,10 +5,13 @@
 
 [![Deploy](https://github.com/Brollix/ninja-flip/actions/workflows/deploy.yml/badge.svg)](https://github.com/Brollix/ninja-flip/actions/workflows/deploy.yml)
 
-**👉 [Open the app](https://warframe-plat-trader-web-qptpzf6lka-ue.a.run.app) 👈**
-
 *A trading companion for [warframe.market](https://warframe.market) — not a
 replacement, an add-on for people who flip regularly.*
+
+> **Status:** the live deployment is currently paused (Cloud Run infra was
+> torn down to stop billing while this project is on hold) — the app isn't
+> reachable at the moment. Everything below still describes how it works;
+> see [CLAUDE.md](CLAUDE.md) for the one-command reactivation steps.
 
 </div>
 
@@ -38,7 +41,7 @@ scanner picks until your free plat runs out).
 
 ## 🚀 Getting started
 
-1. **[Open the app](https://warframe-plat-trader-web-qptpzf6lka-ue.a.run.app)** and sign in with your warframe.market account — no separate password.
+1. Open the app (once reactivated — see the Status note above) and sign in with your warframe.market account — no separate password.
 2. *(optional)* Paste your AlecaFrame public link token (Stats tab → "Create Public Link") to unlock relic inventory, history and the profit ledger. Skip it and you still get the flip scanner and My Orders.
 3. Trade — orders posted from the app show up on warframe.market like any other order.
 
