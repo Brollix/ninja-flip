@@ -3,6 +3,30 @@
 Instructions for Claude Code working in this repo. See [README.md](README.md)
 for what the app does and its architecture.
 
+## Current status: GCP infra torn down (2026-08-24)
+
+All GCP resources for `warframe-plat-trader` were destroyed via
+`terraform destroy` to stop billing while the project is on hold — nothing
+is running. `infra/` still fully describes it, so bringing it back is:
+
+1. `terraform apply` in `infra/` with `-var` flags for `project_id`,
+   `web_image`, `report_image`, `scanner_image` (any existing image tag
+   works to bootstrap — `deploy.yml` overwrites it on the next push anyway).
+2. Re-add the `database_url` secret value — the Secret Manager *container*
+   gets recreated by `terraform apply`, but its value was deleted with the
+   old container. Pull the connection string from the Neon dashboard and
+   run `gcloud secrets versions add database-url --data-file=-` (see
+   `infra/secrets.tf` header comments for the other secrets — Patreon,
+   AlecaFrame — which follow the same pattern).
+3. Push to `master` (or re-run the last deploy workflow) to get real images
+   onto the freshly-created services/jobs.
+4. Cloud Scheduler jobs are created **enabled** by `terraform apply` — no
+   extra step needed there.
+
+Neon itself was left alone (Terraform never managed it) — it auto-suspends
+compute on inactivity, so no action was needed to stop its billing beyond
+not querying it.
+
 ## Deploy
 
 - **Push to `master` deploys automatically** via `.github/workflows/deploy.yml`
