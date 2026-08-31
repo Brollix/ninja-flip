@@ -107,7 +107,9 @@ const HOUR_MS = 3_600_000;
 // usuario, no UTC fijo — cada quien ve el patrón en su propia hora.
 function fmtTick(t: number): string {
   const d = new Date(t);
-  return d.toLocaleString("en-US", { weekday: "short", hour: "2-digit", hour12: false }).replace(",", "");
+  const weekday = d.toLocaleString("en-US", { weekday: "short" });
+  const hour = String(d.getHours()).padStart(2, "0");
+  return `${weekday} ${hour}:00`;
 }
 
 function fmtTooltip(t: number): string {
@@ -158,24 +160,18 @@ export function PeakTimeChart() {
   const xi = (t: number) => PAD_L + ((t - start) / span) * (W - PAD_L - PAD_R);
   const y = (v: number) => PAD_T + (1 - (amp(v) - yDomainMin) / yRange) * (H - PAD_T - PAD_B);
 
-  // Detección de patrón: promedia el volumen por hora del día (local) en
-  // vez de mirar un solo pico puntual — así se ve la hora que se repite
-  // como la más movida, no solo la que ganó por casualidad en esta ventana.
-  const hourAvg = new Map<number, { sum: number; n: number }>();
-  for (const d of data) {
-    const h = new Date(d.t).getHours();
-    const cur = hourAvg.get(h) ?? { sum: 0, n: 0 };
-    hourAvg.set(h, { sum: cur.sum + d.v, n: cur.n + 1 });
-  }
-  let peakHourOfDay = 0, peakHourOfDayAvg = -1;
-  for (const [h, { sum, n }] of hourAvg) {
-    const avg = sum / n;
-    if (avg > peakHourOfDayAvg) { peakHourOfDayAvg = avg; peakHourOfDay = h; }
-  }
-  const peakIndices = data
-    .map((d, i) => ({ i, h: new Date(d.t).getHours() }))
-    .filter(({ h }) => h === peakHourOfDay)
-    .map(({ i }) => i);
+  // Busca el punto de volumen máximo real para cada día calendario en la zona horaria del usuario.
+  const peakPoints = useMemo(() => {
+    const daysMap = new Map<string, (typeof data)[0]>();
+    for (const d of data) {
+      const dayKey = new Date(d.t).toDateString();
+      const currentPeak = daysMap.get(dayKey);
+      if (!currentPeak || d.v > currentPeak.v) {
+        daysMap.set(dayKey, d);
+      }
+    }
+    return Array.from(daysMap.values());
+  }, [data]);
 
   // Interpolación suave tipo Bezier (Catmull-Rom con tensión baja) para suavizar la curva de actividad
   const smooth = (xyPts: { x: number; y: number }[]): string =>
@@ -226,11 +222,9 @@ export function PeakTimeChart() {
           <line x1={PAD_L} x2={W - PAD_R} y1={H - PAD_B} y2={H - PAD_B} className="baseline" />
           <path d={area} className="chart-area" />
           <path d={path} className="chart-line" />
-          {/* patrón detectado: marca CADA aparición de la hora del día que
-              en promedio es la más movida (no solo el pico puntual de esta
-              ventana) — así se ve que se repite, no que fue casualidad. */}
-          {peakIndices.map(i => (
-            <circle key={i} cx={xi(data[i].t)} cy={y(data[i].v)} r={4} className="chart-dot peak-dot" />
+          {/* Picos diarios: marca el volumen máximo real de cada día calendario */}
+          {peakPoints.map(p => (
+            <circle key={p.t} cx={xi(p.t)} cy={y(p.v)} r={4} className="chart-dot peak-dot" />
           ))}
           {/* "ahora": línea vertical siempre visible, no solo al pasar el mouse */}
           <line x1={xi(nowT)} x2={xi(nowT)} y1={PAD_T} y2={H - PAD_B} className="now-line" />
