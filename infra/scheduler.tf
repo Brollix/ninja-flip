@@ -12,7 +12,7 @@ resource "google_cloud_scheduler_job" "flip_scanner_trigger" {
   project    = var.project_id
   region     = var.region
   name       = "${var.app_name}-flip-scanner-trigger"
-  schedule   = "*/15 * * * *"
+  schedule   = "*/30 * * * *"
   time_zone  = "Etc/UTC"
 
   http_target {
@@ -35,7 +35,7 @@ resource "google_cloud_scheduler_job" "report_warmer_trigger" {
   project    = var.project_id
   region     = var.region
   name       = "${var.app_name}-report-warmer-trigger"
-  schedule   = "*/20 * * * *"
+  schedule   = "*/30 * * * *"
   time_zone  = "Etc/UTC"
 
   http_target {

@@ -86,7 +86,7 @@ function writeCache(orders: CheckedOrder[]): void {
  *  API). Separado de checkOrders() para poder chequear solo la orden que
  *  acabás de postear/editar, en vez de re-escanear todas cada vez. */
 async function checkOneOrder(o: RawOrder, slug: string, name: string,
-                             userSlug: string): Promise<CheckedOrder | null> {
+                             userSlug: string, step = 1): Promise<CheckedOrder | null> {
   // el endpoint /top solo trae usuarios online: usamos el libro COMPLETO
   // para no perder órdenes de gente offline (visibles en el sitio)
   const res2 = await wfmFetch(`/wfm/v2/orders/item/${slug}`);
@@ -111,7 +111,7 @@ async function checkOneOrder(o: RawOrder, slug: string, name: string,
     ? bestAnySell : null;
   const price = o.platinum / Math.max(o.perTrade ?? 1, 1);
 
-  return buildChecked(o, slug, name, price, bestOtherBuy, bestOtherSell, offlineBuy, offlineSell);
+  return buildChecked(o, slug, name, price, bestOtherBuy, bestOtherSell, offlineBuy, offlineSell, step);
 }
 
 /** Arma el CheckedOrder (ok/advice/copyMsg/fixPrice/resellAt) a partir del
@@ -120,12 +120,12 @@ async function checkOneOrder(o: RawOrder, slug: string, name: string,
  *  cuando solo cambió TU precio (editar una orden no cambia a los rivales). */
 function buildChecked(o: RawOrder, slug: string, name: string, price: number,
                       bestOtherBuy: number | null, bestOtherSell: number | null,
-                      offlineBuy: number | null, offlineSell: number | null): CheckedOrder {
+                      offlineBuy: number | null, offlineSell: number | null, step = 1): CheckedOrder {
   let ok: boolean, advice: string, copyMsg: string | null = null,
       fixPrice: number | null = null;
   if (o.type === "buy") {
     ok = bestOtherBuy === null || price >= bestOtherBuy;
-    const target = bestOtherBuy !== null ? Math.round(bestOtherBuy + 1) : null;
+    const target = bestOtherBuy !== null ? Math.round(bestOtherBuy + step) : null;
     advice = ok
       ? `first in line ✓${bestOtherBuy != null ? ` · next online buyer pays ${fmtP(bestOtherBuy)}p` : " · no online rivals"}`
       : `outbid (they pay ${fmtP(bestOtherBuy!)}p) — raise to ${target}p`;
@@ -135,7 +135,7 @@ function buildChecked(o: RawOrder, slug: string, name: string, price: number,
     }
   } else {
     ok = bestOtherSell === null || price <= bestOtherSell;
-    const target = bestOtherSell !== null ? Math.round(bestOtherSell - 1) : null;
+    const target = bestOtherSell !== null ? Math.round(bestOtherSell - step) : null;
     advice = ok
       ? `cheapest ✓${bestOtherSell != null ? ` · next online seller asks ${fmtP(bestOtherSell)}p` : " · no online rivals"}`
       : `undercut (${fmtP(bestOtherSell!)}p ask) — lower to ${target}p`;
@@ -157,7 +157,8 @@ function buildChecked(o: RawOrder, slug: string, name: string, price: number,
 
 async function checkOrders(userSlug: string,
                            items: Record<string, [string, string]>,
-                           onProgress: (s: string) => void): Promise<CheckedOrder[]> {
+                           onProgress: (s: string) => void,
+                           step = 1): Promise<CheckedOrder[]> {
   let mine: RawOrder[] | null = null;
   if (isConnected()) {
     // intenta el endpoint autenticado (traería también las ocultas)
@@ -175,7 +176,7 @@ async function checkOrders(userSlug: string,
     const [slug, name] = items[o.itemId] ?? [null, null];
     if (!slug || !name) continue;
     onProgress(`${i + 1}/${mine.length}`);
-    const checked = await checkOneOrder(o, slug, name, userSlug);
+    const checked = await checkOneOrder(o, slug, name, userSlug, step);
     if (checked) out.push(checked);
   }
   // primero las que necesitan acción
@@ -473,6 +474,26 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
   useEffect(() => { autoFixSellRef.current = autoFixSell; }, [autoFixSell]);
   const [autoFixMinProfit, setAutoFixMinProfit] = useState(
     () => Number(localStorage.getItem("wfm_autofix_min_profit")) || 15);
+  const [autoFixStep, setAutoFixStep] = useState(
+    () => Number(localStorage.getItem("wfm_autofix_step")) ?? 1);
+  const autoFixStepRef = useRef(autoFixStep);
+  useEffect(() => {
+    autoFixStepRef.current = autoFixStep;
+    localStorage.setItem("wfm_autofix_step", String(autoFixStep));
+  }, [autoFixStep]);
+
+  const [autoFillMaxQty, setAutoFillMaxQty] = useState(
+    () => Number(localStorage.getItem("wfm_autofill_max_qty")) || 1);
+  const autoFillMaxQtyRef = useRef(autoFillMaxQty);
+  useEffect(() => {
+    autoFillMaxQtyRef.current = autoFillMaxQty;
+    localStorage.setItem("wfm_autofill_max_qty", String(autoFillMaxQty));
+  }, [autoFillMaxQty]);
+
+  // Search & Sort states
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortKey, setSortKey] = useState<"name" | "price" | "profit">("name");
+  const [sortAsc, setSortAsc] = useState(true);
   const [autoPause, setAutoPause] = useState(() => localStorage.getItem("wfm_autopause") === "true");
   const [pauseBusy, setPauseBusy] = useState(false);
   const pauseBusyRef = useRef(false);
@@ -620,7 +641,7 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
         if (!itemId) continue;
         const cost = Math.round(f.buy + 1);
         if (cost > cap) continue;
-        const qty = Math.max(1, Math.min(bulkQty(f), Math.floor(cap / cost)));
+        const qty = Math.max(1, Math.min(bulkQty(f), autoFillMaxQtyRef.current, Math.floor(cap / cost)));
         if ((Math.round(f.sell - 1) - cost) * qty < 5) continue; // no vale gastar el trade
         try {
           const { rank, subtype, bulkTradable } = await resolveTradeInfo(f.slug, f.name);
@@ -682,7 +703,7 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
         itemsRef.current = await loadItems();
       }
       localStorage.setItem("wfm_user", user);
-      let checked = await checkOrders(user, itemsRef.current!, setProgress);
+      let checked = await checkOrders(user, itemsRef.current!, setProgress, autoFixStepRef.current);
 
       // isPremium() acá también, no solo en el checkbox de la UI — si ya
       // tenías "wfm_autofix_buy"/"wfm_autofix_sell" en true en localStorage
@@ -753,7 +774,7 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
             }
           }
           if (changes) {
-            checked = await checkOrders(user, itemsRef.current!, setProgress);
+            checked = await checkOrders(user, itemsRef.current!, setProgress, autoFixStepRef.current);
           }
         }
         if (autoFixErrors.length) {
@@ -773,7 +794,7 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
       setCountdown(autoMin * 60);
       setProgress("");
     }
-  }, [user, autoMin, autoFixBuy, autoFixSell]);
+  }, [user, autoMin, autoFixBuy, autoFixSell, autoFixStep]);
 
   // orden nueva: 1 sola llamada (el libro de ESE item) — no hay que
   // re-chequear las demás órdenes, no cambiaron.
@@ -901,8 +922,40 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
   }, [autoMin, refresh]);
 
   const bad = orders?.filter(o => !o.ok).length ?? 0;
-  const buys = orders?.filter(o => o.type === "buy") ?? [];
-  const sells = orders?.filter(o => o.type === "sell") ?? [];
+  const rawBuys = orders?.filter(o => o.type === "buy") ?? [];
+  const rawSells = orders?.filter(o => o.type === "sell") ?? [];
+
+  const filterAndSort = (list: CheckedOrder[]) => {
+    let res = list;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      res = res.filter(o => o.name.toLowerCase().includes(q));
+    }
+    return [...res].sort((a, b) => {
+      let valA: any = 0;
+      let valB: any = 0;
+      if (sortKey === "name") {
+        valA = a.name.toLowerCase();
+        valB = b.name.toLowerCase();
+      } else if (sortKey === "price") {
+        valA = a.price;
+        valB = b.price;
+      } else if (sortKey === "profit") {
+        valA = a.type === "buy"
+          ? (a.resellAt != null ? a.resellAt - a.price : -Infinity)
+          : (a.costBasis != null ? a.price - a.costBasis : -Infinity);
+        valB = b.type === "buy"
+          ? (b.resellAt != null ? b.resellAt - b.price : -Infinity)
+          : (b.costBasis != null ? b.price - b.costBasis : -Infinity);
+      }
+      if (valA < valB) return sortAsc ? -1 : 1;
+      if (valA > valB) return sortAsc ? 1 : -1;
+      return 0;
+    });
+  };
+
+  const buys = filterAndSort(rawBuys);
+  const sells = filterAndSort(rawSells);
 
   const rowActions = (o: CheckedOrder) => (
     <span className="actions">
@@ -941,11 +994,18 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
       <MarketLink slug={o.slug}>{o.name}</MarketLink>
       {o.qty > 1 ? ` ×${o.qty}` : ""}
       {o.hidden && <> <Tag title="Invisible on the market">hidden</Tag></>}
+      {!o.ok && (
+        <span className="loss" style={{ marginLeft: 8, fontSize: "11px", fontWeight: "bold" }}>
+          (Rival: {o.type === "buy" ? o.bestOtherBuy : o.bestOtherSell}p)
+        </span>
+      )}
     </td>
   );
 
   const buyProfit = buys.reduce((a, o) => a + (o.resellAt != null ? o.resellAt - o.price : 0), 0);
   const sellProfit = sells.reduce((a, o) => a + (o.costBasis != null ? o.price - o.costBasis : 0), 0);
+  const rawBuyProfit = rawBuys.reduce((a, o) => a + (o.resellAt != null ? o.resellAt - o.price : 0), 0);
+  const rawSellProfit = rawSells.reduce((a, o) => a + (o.costBasis != null ? o.price - o.costBasis : 0), 0);
   // memoizado por `orders`, no recalculado en cada render — este componente
   // re-renderiza cada segundo por el countdown del auto-refresh, y
   // getAllFlips() hace un filter+dedupe sobre TODO el historial (wfm.ts)
@@ -954,6 +1014,20 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
   const allFlips = useMemo(() => getAllFlips(), [orders]);
   const realized = allFlips.reduce((a, f) => a + (f.sell - f.buy), 0);
   const avgFlipProfit = allFlips.length ? realized / allFlips.length : 0;
+
+  const handleSort = (key: "name" | "price" | "profit") => {
+    if (sortKey === key) {
+      setSortAsc(!sortAsc);
+    } else {
+      setSortKey(key);
+      setSortAsc(true);
+    }
+  };
+
+  const sortIndicator = (key: "name" | "price" | "profit") => {
+    if (sortKey !== key) return null;
+    return sortAsc ? " ▲" : " ▼";
+  };
 
   const sortedFlips = [...allFlips].sort((a, b) => b.ts - a.ts);
 
@@ -986,6 +1060,10 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
         <label className="sim-field">User
           <input value={user} onChange={e => setUser(e.target.value)}
                  onKeyDown={e => e.key === "Enter" && refresh()} />
+        </label>
+        <label className="sim-field">Search
+          <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                 placeholder="Filter orders..." style={{ minWidth: 140 }} />
         </label>
         <button className="btn" disabled={state === "loading"} onClick={refresh}>
           <RefreshCw size={12} className={`inline-icon ${state === "loading" ? "spin" : ""}`} />{" "}
@@ -1031,6 +1109,12 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
                        onChange={e => setAutoFixMinProfit(Math.max(1, +e.target.value || 1))}
                        style={{ width: 56 }} /> p
               </label>
+              <label className="sim-field" title="Undercut step: amount of platinum to beat competitors by. Set to 0 to match instead of undercut.">
+                undercut step
+                <input type="number" min={0} max={10} value={autoFixStep}
+                       onChange={e => setAutoFixStep(Math.max(0, Math.min(10, +e.target.value || 0)))}
+                       style={{ width: 56 }} /> p
+              </label>
               <label className="chk" title="Hides your orders outside the busiest trading hour, shows them again 1h before it">
                 <input type="checkbox" checked={autoPause} onChange={e => setAutoPause(e.target.checked)} />
                 Auto-pause outside peak hours
@@ -1046,6 +1130,12 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
                     <option value="top">top picks only</option>
                     <option value="liquid">any liquid flip</option>
                   </select>
+                  <label className="sim-field" title="Maximum quantity of each item type to buy/post at once to avoid overconcentration.">
+                    max qty per item
+                    <input type="number" min={1} max={50} value={autoFillMaxQty}
+                           onChange={e => setAutoFillMaxQty(Math.max(1, Math.min(50, +e.target.value || 1)))}
+                           style={{ width: 56 }} />
+                  </label>
                   <span className="hint" style={{ margin: 0 }}>on:</span>
                   <label className="chk" title="Prime sets (parts→set arbitrage included)">
                     <input type="checkbox" checked={autoFillKinds.has("set")}
@@ -1086,15 +1176,15 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
       {orders && !orders.length && <p className="muted">No orders.</p>}
       {orders && orders.length > 0 && (
         <div className="tiles">
-          <Tile value={`${orders.length}`} label={`active orders (${buys.length} buy · ${sells.length} sell)`} />
-          <Tile value={<Plat value={buys.reduce((a, o) => a + o.price * o.qty, 0)} />} label="plat committed in buys" />
-          <Tile value={<span className="gain-pos"><Plat value={buyProfit + sellProfit} sign /></span>} label="potential profit" />
-          <Tile value={bad ? <span className="loss">{bad}</span> : "0"} label="out of position" />
+          <Tile value={`${orders.length}`} label={`active orders (${rawBuys.length} buy · ${rawSells.length} sell)`} />
+          <Tile value={<Plat value={rawBuys.reduce((a, o) => a + o.price * o.qty, 0)} />} label="plat committed in buys" />
+          <Tile value={<span className="gain-pos"><Plat value={rawBuyProfit + rawSellProfit} sign /></span>} label="potential profit" tooltip="Net platinum you will earn if all active orders complete at competitive prices." />
+          <Tile value={bad ? <span className="loss">{bad}</span> : "0"} label="out of position" tooltip="Orders undercut by competitors. Click ⚡ on their rows to match." />
           <Tile value={<span className={realized >= 0 ? "gain-pos" : "loss"}><Plat value={realized} sign /></span>}
-                label={`realized profit (${allFlips.length} flip${allFlips.length === 1 ? "" : "s"})`} />
+                label={`realized profit (${allFlips.length} flip${allFlips.length === 1 ? "" : "s"})`} tooltip="Total platinum earned from completed and closed flips." />
           {allFlips.length > 0 && (
             <Tile value={<span className={avgFlipProfit >= 0 ? "gain-pos" : "loss"}><Plat value={avgFlipProfit} sign /></span>}
-                  label="avg profit per flip" />
+                  label="avg profit per flip" tooltip="Average net platinum earned per closed transaction." />
           )}
         </div>
       )}
@@ -1109,10 +1199,10 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
             <table>
               <thead>
                 <tr>
-                  <th>Item</th>
-                  <th className="num">Your price</th>
+                  <th style={{ cursor: "pointer" }} onClick={() => handleSort("name")}>Item{sortIndicator("name")}</th>
+                  <th className="num" style={{ cursor: "pointer" }} onClick={() => handleSort("price")}>Your price{sortIndicator("price")}</th>
                   <th className="num" title="1p under the cheapest seller">Sell at</th>
-                  <th className="num" title="Sell-at minus your price">Profit</th>
+                  <th className="num" title="Sell-at minus your price" style={{ cursor: "pointer" }} onClick={() => handleSort("profit")}>Profit{sortIndicator("profit")}</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -1149,10 +1239,10 @@ export function OrdersView({ defaultUser, basePlat, unsoldPurchases, flips }: {
             <table>
               <thead>
                 <tr>
-                  <th>Item</th>
-                  <th className="num">Your price</th>
+                  <th style={{ cursor: "pointer" }} onClick={() => handleSort("name")}>Item{sortIndicator("name")}</th>
+                  <th className="num" style={{ cursor: "pointer" }} onClick={() => handleSort("price")}>Your price{sortIndicator("price")}</th>
                   <th className="num" title="What you paid (tracked from your buy)">Paid</th>
-                  <th className="num" title="Your price minus what you paid">Profit</th>
+                  <th className="num" title="Your price minus what you paid" style={{ cursor: "pointer" }} onClick={() => handleSort("profit")}>Profit{sortIndicator("profit")}</th>
                   <th>Actions</th>
                 </tr>
               </thead>

@@ -306,7 +306,7 @@ export function FlipsView({ flips: flipsProp, flipsTs, startPlat, preview }: {
   // instante) — sin el chequeo de sell > buy, el "top pick" podía mostrar
   // un spread negativo.
   const liquid = flips.filter(f => f.vol48 >= 30 && f.buy > 0 && f.sell > f.buy);
-  const bestParts = [...liquid].filter(f => (f.parts_profit ?? 0) > 0)
+  const bestParts = [...liquid].filter(f => f.parts_total != null && f.parts_total > 0 && (f.parts_profit ?? 0) > 0)
     .sort((a, b) => (b.parts_profit ?? 0) - (a.parts_profit ?? 0))[0];
   // por score, no por spread crudo — si no, un arcano caro y poco líquido
   // le ganaba a algo con menos plata por flip pero de verdad ejecutable

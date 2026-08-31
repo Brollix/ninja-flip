@@ -68,13 +68,19 @@ def _throttle() -> None:
         _next_slot[0] = now + RATE
 
 
+_market_items_cache = None
+
 def market_items():
     """Catálogo completo de warframe.market. Antes leía un JSON compartido con
     relic_analysis.py (cache/market_items.json) — en un Job de Cloud Run cada
     corrida es un container nuevo, así que lo pedimos fresco (1 sola request,
     no es la parte cara del escaneo)."""
+    global _market_items_cache
+    if _market_items_cache is not None:
+        return _market_items_cache
     j = get_json("https://api.warframe.market/v2/items")
-    return (j or {}).get("data") or []
+    _market_items_cache = (j or {}).get("data") or []
+    return _market_items_cache
 
 
 def get_json(url: str, tries: int = 3):
@@ -579,7 +585,7 @@ def _run_scan():
         # reusa `targets` (ya en memoria) en vez de volver a pedir el catálogo
         # completo — market_items() es el payload más grande del escaneo,
         # no hace falta bajarlo dos veces por corrida.
-        id_to_slug = {it["id"]: it["slug"] for it, _ in targets}
+        id_to_slug = {it["id"]: it["slug"] for it in market_items()}
         for r in parts_rows:
             total, txt = parts_arbitrage(r, id_to_slug)
             if total is None:

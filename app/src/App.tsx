@@ -391,6 +391,7 @@ function AppInner() {
         <footer className="app-footer">
           made by <a href="https://warframe.market/profile/brollix" target="_blank" rel="noreferrer">Brollix</a>
           {" "}· <a href="https://www.patreon.com/c/ninjaflip" target="_blank" rel="noreferrer">Patreon</a>
+          {" "}· <span title="Click to copy Discord username" onClick={() => { navigator.clipboard.writeText("brollix"); alert("Discord username 'brollix' copied to clipboard!"); }} style={{ cursor: "pointer", textDecoration: "underline" }}>Discord (brollix)</span>
         </footer>
       </div>
     </div>

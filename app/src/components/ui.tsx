@@ -166,9 +166,9 @@ export function VolBadge({ vol }: { vol: number }) {
   return <>{vol}</>;
 }
 
-export function Tile({ value, label }: { value: ReactNode; label: string }) {
+export function Tile({ value, label, tooltip }: { value: ReactNode; label: string; tooltip?: string }) {
   return (
-    <div className="tile">
+    <div className="tile" {...(tooltip ? { "data-tooltip": tooltip } : {})}>
       <div className="v">{value}</div>
       <div className="l">{label}</div>
     </div>
