@@ -99,3 +99,8 @@ not querying it.
   Terraform state/cache/plan files — never force-add anything under those.
   This bit us once already (~160MB of build artifacts and a Terraform
   provider binary almost got committed).
+
+## Git & Workflow Conventions
+
+- Always stage (`git add`), commit (`git commit -m "..."`), and push (`git push`) your changes automatically once a task is completed or files are modified.
+
