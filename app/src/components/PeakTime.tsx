@@ -177,14 +177,20 @@ export function PeakTimeChart() {
     .filter(({ h }) => h === peakHourOfDay)
     .map(({ i }) => i);
 
-  // Interpolación lineal simple entre baldes — a diferencia de HistoryChart,
-  // acá cada punto es un dato real (no un agregado suavizable) y una curva
-  // suave puede sugerir un pico entre horas que no existió.
-  const linear = (pts: { x: number; y: number }[]): string =>
-    pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  // Interpolación suave tipo Bezier (Catmull-Rom con tensión baja) para suavizar la curva de actividad
+  const smooth = (xyPts: { x: number; y: number }[]): string =>
+    xyPts.map((p, i) => {
+      if (i === 0) return `M${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+      const p0 = xyPts[i - 2] ?? xyPts[i - 1], p1 = xyPts[i - 1], p2 = p, p3 = xyPts[i + 1] ?? p;
+      const k = 0.18; // "un poco" de curva, sin exagerar
+      const clampX = (v: number) => Math.min(Math.max(v, p1.x), p2.x);
+      const c1x = clampX(p1.x + (p2.x - p0.x) * k), c1y = p1.y + (p2.y - p0.y) * k;
+      const c2x = clampX(p2.x - (p3.x - p1.x) * k), c2y = p2.y - (p3.y - p1.y) * k;
+      return `C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+    }).join(" ");
 
   const xy = data.map(d => ({ x: xi(d.t), y: y(d.v) }));
-  const path = linear(xy);
+  const path = smooth(xy);
   const area = `${path} L${xi(end).toFixed(1)},${H - PAD_B} L${PAD_L},${H - PAD_B} Z`;
   // Valores reales (no amplificados) para las etiquetas del eje — la
   // transformación solo afecta DÓNDE se dibujan, el número mostrado es
