@@ -133,6 +133,19 @@ export function PeakTimeChart() {
     return out;
   }, [buckets]);
 
+  // Busca el punto de volumen máximo real para cada día calendario en la zona horaria del usuario.
+  const peakPoints = useMemo(() => {
+    const daysMap = new Map<string, (typeof data)[0]>();
+    for (const d of data) {
+      const dayKey = new Date(d.t).toDateString();
+      const currentPeak = daysMap.get(dayKey);
+      if (!currentPeak || d.v > currentPeak.v) {
+        daysMap.set(dayKey, d);
+      }
+    }
+    return Array.from(daysMap.values());
+  }, [data]);
+
   if (!data.length) return null;
 
   const start = data[0].t, end = data[data.length - 1].t;
@@ -159,19 +172,6 @@ export function PeakTimeChart() {
 
   const xi = (t: number) => PAD_L + ((t - start) / span) * (W - PAD_L - PAD_R);
   const y = (v: number) => PAD_T + (1 - (amp(v) - yDomainMin) / yRange) * (H - PAD_T - PAD_B);
-
-  // Busca el punto de volumen máximo real para cada día calendario en la zona horaria del usuario.
-  const peakPoints = useMemo(() => {
-    const daysMap = new Map<string, (typeof data)[0]>();
-    for (const d of data) {
-      const dayKey = new Date(d.t).toDateString();
-      const currentPeak = daysMap.get(dayKey);
-      if (!currentPeak || d.v > currentPeak.v) {
-        daysMap.set(dayKey, d);
-      }
-    }
-    return Array.from(daysMap.values());
-  }, [data]);
 
   // Interpolación suave tipo Bezier (Catmull-Rom con tensión baja) para suavizar la curva de actividad
   const smooth = (xyPts: { x: number; y: number }[]): string =>
