@@ -137,6 +137,7 @@ export function FlipsView({ flips: flipsProp, flipsTs, startPlat, preview }: {
   const [kind, setKind] = useState<"" | "set" | "arcane" | "mod">("");
   const [minSpread, setMinSpread] = useState(15);
   const [flips, setFlips] = useState(flipsProp);
+  useEffect(() => { setFlips(flipsProp); }, [flipsProp]);
   const [live, setLive] = useState<"idle" | "running" | "done">("idle");
   const [liveProgress, setLiveProgress] = useState("");
   const [lastLive, setLastLive] = useState<Date | null>(null);

@@ -112,7 +112,7 @@ export async function loadData(opts: { refresh?: boolean } = {}): Promise<{
     ? fetch(`/api/report${opts.refresh ? "?refresh=1" : ""}`, {
         headers: { Authorization: `Bearer ${jwt}` },
         cache: "no-store",
-      })
+      }).catch(() => null)
     : null;
 
   const flipRes = await flipPromise;
@@ -128,9 +128,9 @@ export async function loadData(opts: { refresh?: boolean } = {}): Promise<{
     return { report: null, reportError: "not_signed_in", flips, flipsTs };
   }
   const repRes = await repPromise;
-  if (!repRes.ok) {
-    const body = await repRes.json().catch(() => ({}) as { error?: string });
-    const reportError = body.error === "no_aleca_token" ? "no_aleca_token" : `${body.error ?? repRes.status}`;
+  if (!repRes || !repRes.ok) {
+    const body = repRes ? await repRes.json().catch(() => ({}) as { error?: string }) : {};
+    const reportError = body.error === "no_aleca_token" ? "no_aleca_token" : `${body.error ?? (repRes ? repRes.status : "network_error")}`;
     return { report: null, reportError, flips, flipsTs };
   }
   const report = (await repRes.json()) as Report;

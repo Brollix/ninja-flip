@@ -9,7 +9,7 @@ import { AuthStatus, Composer } from "./components/Composer";
 import { Landing } from "./components/Landing";
 import { PeakTimeBadge } from "./components/PeakTime";
 import { TierModal } from "./components/TierModal";
-import { Plat } from "./components/ui";
+import { ErrorBoundary, Plat } from "./components/ui";
 import {
   Check, CircleOff, ClipboardList, Coins, Eye, Gamepad2, LayoutDashboard, Link2, Package,
   RefreshCw, Repeat, Target,
@@ -205,7 +205,9 @@ function UpdateBanner() {
 
 function AppInner() {
   const [report, setReport] = useState<Report | null>(null);
-  const [reportError, setReportError] = useState<ReportError | null>(null);
+  const [reportError, setReportError] = useState<ReportError | null>(
+    () => (getJwt() ? null : "not_signed_in")
+  );
   const [flips, setFlips] = useState<Flip[]>([]);
   const [flipsTs, setFlipsTs] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -403,9 +405,9 @@ function AppInner() {
 // de una versión nueva SIEMPRE, no solo cuando llegaste a la pantalla final.
 export default function App() {
   return (
-    <>
+    <ErrorBoundary>
       <UpdateBanner />
       <AppInner />
-    </>
+    </ErrorBoundary>
   );
 }

@@ -1,8 +1,30 @@
-import { useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import { Component, useMemo, useState } from "react";
+import type { ErrorInfo, ReactNode } from "react";
 import { Check, Lock, TriangleAlert } from "lucide-react";
 import { copyText, marketUrl } from "../lib";
 import { startPatreonConnect } from "../wfm";
+
+export class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  override state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  override componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Unhandled error caught by boundary:", error, info);
+  }
+  override render() {
+    if (this.state.error) {
+      return (
+        <div className="wrap">
+          <div className="card error">
+            <h2>Something went wrong</h2>
+            <p className="hint">{this.state.error.message}</p>
+            <button className="btn primary" onClick={() => window.location.reload()}>Reload page</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 /** Reemplaza una feature premium para cuentas basic. El botón manda al
  *  browser a loguearse con la cuenta de Patreon del usuario (OAuth real,
