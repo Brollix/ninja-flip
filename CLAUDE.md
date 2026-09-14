@@ -3,7 +3,7 @@
 Instructions for Claude Code working in this repo. See [README.md](README.md)
 for what the app does and its architecture.
 
-## Current status: GCP infra torn down (2026-08-24)
+## Current status: GCP infra torn down (2026-09-14)
 
 All GCP resources for `warframe-plat-trader` were destroyed via
 `terraform destroy` to stop billing while the project is on hold — nothing
