@@ -90,9 +90,9 @@ not querying it.
 ## Code style already established here
 
 - **Everything in this project is in English** — UI copy, code comments,
-  commit messages, docs, and replies to the user (even when they write in
-  Spanish). Older comments are still in Spanish; translate them when you're
-  already touching that code, but don't do mass rewrites unasked.
+  commit messages, docs. The only exception is chat replies to the user,
+  which are in Spanish. Older comments are still in Spanish; translate them
+  when you're already touching that code, but don't do mass rewrites unasked.
 - Comments explain **why**, not what. Don't add comments that restate the code.
 - No new abstractions/backwards-compat shims unless asked — this repo
   favors direct, explicit code (see the general engineering guidance for
