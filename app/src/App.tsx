@@ -11,17 +11,11 @@ import { PeakTimeBadge } from "./components/PeakTime";
 import { TierModal } from "./components/TierModal";
 import { ErrorBoundary, Plat } from "./components/ui";
 import {
-  Check, CircleOff, ClipboardList, Coins, Eye, Gamepad2, LayoutDashboard, Link2, Package,
-  RefreshCw, Repeat, Target,
+  CircleOff, ClipboardList, Coins, Eye, Gamepad2, LayoutDashboard, Link2, Lock, Package,
+  RefreshCw, Repeat, Target, X,
 } from "lucide-react";
 
-const ALECA_SKIP_KEY = "aleca_skip_v1";
-// Pausa temporal: no se ofrece conectar AlecaFrame por ahora (nadie nuevo ve
-// el prompt ni el link de "connect AlecaFrame"). Nada del backend cambia —
-// /api/report sigue andando igual para quien YA tenga un token guardado
-// (vos, tu amigo), esto solo apaga la puerta de entrada para gente nueva.
-// Para reactivar: volver esto a true.
-const ALECAFRAME_ENABLED = false;
+const ALECA_BANNER_KEY = "aleca_banner_dismissed_v1";
 
 const TABS = [
   { id: "overview", label: "Overview", Icon: LayoutDashboard },
@@ -33,6 +27,17 @@ const TABS = [
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
+
+// Tabs that need the AlecaFrame report. Without a token they still show
+// (locked) so people know they exist — the connect prompt lives inside the
+// tab, at the moment someone actually wants that feature, instead of a
+// blocking screen right after login.
+const ALECA_FEATURES: Partial<Record<TabId, string>> = {
+  overview: "your inventory value, platinum history and recent sales",
+  hunt: "which relics are worth farming next, based on what you already own",
+  relics: "which of your relics are worth cracking",
+  ducats: "which of your prime parts are worth more as ducats",
+};
 
 /** Solo visible para el admin (ver ALWAYS_PREMIUM_SLUGS/ADMIN_SLUGS en wfm.ts)
  *  — no hay Patreon conectado todavía, así que esto deja previsualizar cómo
@@ -104,14 +109,11 @@ function PlatBadge({ last }: { last: HistoryPoint | null }) {
   );
 }
 
-/** Se pega cuando /api/report todavía no encuentra un token guardado para
- *  este wfm_user_id — reemplaza el ALECA_PUBLIC_TOKEN único y global que
- *  antes vivía en .env: ahora cada usuario carga el suyo. Se puede saltear
- *  y cargar después — no bloquea Flips/My Orders, que no necesitan AlecaFrame
- *  para nada. AuthStatus arriba confirma que la conexión a warframe.market
- *  sí funcionó (si no hubiese funcionado, ni se habría llegado a esta
- *  pantalla — /api/report exige sesión de wfm antes que nada). */
-function AlecaTokenPrompt({ onSaved, onSkip }: { onSaved: () => void; onSkip: () => void }) {
+/** Shown inside a locked tab when /api/report finds no saved token for this
+ *  wfm_user_id — each user stores their own (there's no global
+ *  ALECA_PUBLIC_TOKEN in .env anymore). Flips/My Orders don't need it, so
+ *  this never blocks the whole app. */
+function AlecaConnect({ feature, onSaved }: { feature: string; onSaved: () => void }) {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -136,32 +138,38 @@ function AlecaTokenPrompt({ onSaved, onSkip }: { onSaved: () => void; onSkip: ()
   }
 
   return (
-    <div className="wrap">
-      <div className="card">
-        <div className="card-head">
-          <h2><Link2 size={16} /> Connect your AlecaFrame account</h2>
-          <AuthStatus />
-        </div>
-        <p className="hint">
-          <Check size={13} className="inline-icon" /> Your warframe.market login worked — that's what got you here. Now paste your{" "}
-          <b>public link token</b> from AlecaFrame's Stats tab ("Create Public Link") to power your
-          relic inventory, history and sales. Saved once, just for your account.
-        </p>
-        <div className="composer-fields">
-          <input type="text" placeholder="public token" value={token}
-                 onChange={e => setToken(e.target.value)}
-                 onKeyDown={e => e.key === "Enter" && !busy && token.trim() && save()}
-                 style={{ minWidth: 420 }} />
-          <button className="btn primary" disabled={busy || !token.trim()} onClick={save}>
-            {busy ? "saving…" : "Save"}
-          </button>
-        </div>
-        {err && <p className="loss">{err}</p>}
-        <p className="hint" style={{ marginTop: 8 }}>
-          Don't have it handy? <button className="linkish" onClick={onSkip}>Skip for now</button> —
-          you can still trade (Flips, My Orders) and connect AlecaFrame later.
-        </p>
+    <div className="premium-lock">
+      <p><Lock size={14} className="inline-icon" /> <b>Connect AlecaFrame</b> to see {feature}.</p>
+      <p className="hint">
+        Optional — Flips and My Orders work without it. In AlecaFrame, open the <b>Stats</b> tab,
+        click <b>Create Public Link</b> and paste the token here. Saved once, just for your account.
+      </p>
+      <div className="premium-lock-connect">
+        <input type="text" placeholder="AlecaFrame public token" value={token}
+               onChange={e => setToken(e.target.value)}
+               onKeyDown={e => e.key === "Enter" && !busy && token.trim() && save()} />
+        <button className="btn primary" disabled={busy || !token.trim()} onClick={save}>
+          {busy ? "saving…" : "Connect"}
+        </button>
       </div>
+      {err && <p className="loss">{err}</p>}
+    </div>
+  );
+}
+
+/** One-time, dismissible heads-up that AlecaFrame exists — once closed it
+ *  never comes back; the locked tabs stay for anyone who looks later. */
+function AlecaBanner({ onOpen }: { onOpen: () => void }) {
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem(ALECA_BANNER_KEY) === "1");
+  if (dismissed) return null;
+  const dismiss = () => { localStorage.setItem(ALECA_BANNER_KEY, "1"); setDismissed(true); };
+  return (
+    <div className="patreon-banner aleca-banner">
+      <span>
+        <Link2 size={14} className="inline-icon" /> Tip: connect AlecaFrame to unlock relic analysis and your profit history.{" "}
+        <button className="linkish" onClick={() => { dismiss(); onOpen(); }}>Connect →</button>
+      </span>
+      <button className="linkish" onClick={dismiss} title="Dismiss" aria-label="Dismiss"><X size={14} /></button>
     </div>
   );
 }
@@ -213,10 +221,9 @@ function AppInner() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>(() => {
     const fromPath = location.pathname.slice(1) as TabId;
-    return TABS.some(t => t.id === fromPath) ? fromPath : "overview";
+    // Flips, not Overview: it works without AlecaFrame, so nobody lands on a locked tab.
+    return TABS.some(t => t.id === fromPath) ? fromPath : "flips";
   });
-  const [alecaSkipped, setAlecaSkipped] = useState(
-    () => !ALECAFRAME_ENABLED || localStorage.getItem(ALECA_SKIP_KEY) === "1");
 
   // Vuelta del login con Patreon (ver premium.ts callback -> redirect a
   // "/?patreon=..."): leemos el resultado una vez y limpiamos el query string
@@ -285,10 +292,9 @@ function AppInner() {
   // error — si no, la URL queda en "/overview" (el tab por default) para
   // cualquiera que entra sin cuenta conectada, aunque lo que ve sea el
   // landing. dashboardVisible espeja las mismas condiciones de los early
-  // returns de abajo (error/not_signed_in/no_aleca_token/loading).
+  // returns de abajo (error/not_signed_in/loading).
   const dashboardVisible = !error
     && reportError !== "not_signed_in"
-    && !(reportError === "no_aleca_token" && !alecaSkipped)
     && !(reportError && reportError !== "no_aleca_token")
     && !(!report && !reportError);
   // Y al revés: si entrás a /orders sin sesión (link viejo, o te
@@ -311,14 +317,6 @@ function AppInner() {
   if (reportError === "not_signed_in") {
     return <Landing />;
   }
-  if (reportError === "no_aleca_token" && !alecaSkipped) {
-    return (
-      <AlecaTokenPrompt
-        onSaved={refresh}
-        onSkip={() => { localStorage.setItem(ALECA_SKIP_KEY, "1"); setAlecaSkipped(true); }}
-      />
-    );
-  }
   if (reportError && reportError !== "no_aleca_token") {
     return <div className="wrap"><div className="card error">{reportError}</div></div>;
   }
@@ -332,26 +330,31 @@ function AppInner() {
     );
   }
 
-  // Sin AlecaFrame (saltaste el paso) solo Flips/My Orders funcionan — el
-  // resto necesita reliquias/historial que no tenemos. plat arranca en 0 y
-  // te dejo cargarlo a mano (PlatBadge ya soporta report=null).
+  // Without AlecaFrame only Flips/My Orders work — the other tabs need
+  // relics/history we don't have and show AlecaConnect instead. plat starts
+  // at 0 and can be set by hand (PlatBadge already handles report=null).
   const last = report?.history?.length ? report.history[report.history.length - 1] : null;
   const plat = currentPlat(last?.plat ?? 0);
-  const availableTabs = report ? TABS : TABS.filter(t => t.id === "flips" || t.id === "orders");
-  const activeTab = availableTabs.some(t => t.id === tab) ? tab : "flips";
+  const activeTab = tab;
+  const lockedFeature = !report ? ALECA_FEATURES[activeTab] : undefined;
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-brand">NinjaFlip</div>
         <nav className="sidebar-nav">
-          {availableTabs.map(t => (
-            <button key={t.id}
-                    className={`sidebar-tab ${activeTab === t.id ? "active" : ""}`}
-                    onClick={() => setTab(t.id)}>
-              <t.Icon size={15} strokeWidth={2} /> {t.label}
-            </button>
-          ))}
+          {TABS.map(t => {
+            const locked = !report && !!ALECA_FEATURES[t.id];
+            return (
+              <button key={t.id}
+                      className={`sidebar-tab ${activeTab === t.id ? "active" : ""} ${locked ? "locked" : ""}`}
+                      title={locked ? "Requires AlecaFrame (optional)" : undefined}
+                      onClick={() => setTab(t.id)}>
+                <t.Icon size={15} strokeWidth={2} /> {t.label}
+                {locked && <Lock size={12} className="sidebar-tab-lock" />}
+              </button>
+            );
+          })}
         </nav>
         <AdminPreviewToggle />
       </aside>
@@ -381,10 +384,9 @@ function AppInner() {
                   </button>
                 </>
               )}
-              {!report && ALECAFRAME_ENABLED && (
-                <> · <button className="linkish" onClick={() => {
-                  localStorage.removeItem(ALECA_SKIP_KEY); setAlecaSkipped(false);
-                }}><Link2 size={12} className="inline-icon" /> connect AlecaFrame</button></>
+              {!report && (
+                <> · <button className="linkish" onClick={() => setTab("overview")}>
+                  <Link2 size={12} className="inline-icon" /> connect AlecaFrame</button></>
               )}
             </div>
           </div>
@@ -399,9 +401,11 @@ function AppInner() {
           )
         )}
         {showTiers && <TierModal onClose={() => setShowTiers(false)} />}
+        {!report && <AlecaBanner onOpen={() => setTab("overview")} />}
         <Composer />
 
         <main className="main-content">
+          {lockedFeature && <AlecaConnect feature={lockedFeature} onSaved={refresh} />}
           {activeTab === "overview" && report && <SummaryView relics={relics} sales={report.sales} history={report.history ?? []} />}
           {activeTab === "flips" && <FlipsView flips={flips} flipsTs={flipsTs} startPlat={plat} />}
           {activeTab === "orders" && <OrdersView defaultUser={report?.username ?? getUser()?.ingame_name ?? ""} basePlat={plat} unsoldPurchases={report?.unsold_purchases ?? []} flips={flips} />}

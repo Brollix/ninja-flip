@@ -151,6 +151,8 @@ h1 { font: var(--weight-bold) var(--text-lg) var(--font-display); margin: 0 0 va
 .sidebar-tab svg { flex: 0 0 auto; opacity: .85; }
 .sidebar-tab:hover { color: var(--ink); background: var(--surface-2); }
 .sidebar-tab.active { color: var(--accent); background: var(--accent-bg); border-color: transparent; font-weight: var(--weight-semibold); }
+.sidebar-tab.locked:not(.active) { color: var(--muted); }
+.sidebar-tab-lock { margin-left: auto; opacity: .6; }
 
 .admin-preview { margin-top: auto; padding-top: var(--space-7); border-top: 1px solid var(--grid); }
 .admin-preview-label {
@@ -187,6 +189,7 @@ h1 { font: var(--weight-bold) var(--text-lg) var(--font-display); margin: 0 0 va
   color: var(--ink); text-align: center; transition: background var(--transition-fast);
 }
 .patreon-banner.clickable:hover { background: var(--accent-bg); }
+.aleca-banner { display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); }
 .patreon-banner-cta { color: var(--accent); font-weight: var(--weight-bold); white-space: nowrap; }
 
 .tier-perks { list-style: none; margin: 0 0 var(--space-8); padding: 0; display: flex; flex-direction: column; gap: var(--space-5); }
