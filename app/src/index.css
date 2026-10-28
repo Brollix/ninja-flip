@@ -248,6 +248,11 @@ h1 { font: var(--weight-bold) var(--text-lg) var(--font-display); margin: 0 0 va
   .sidebar-brand { display: none; }
   .sidebar-nav { flex-direction: row; flex-wrap: nowrap; }
   .sidebar-tab { white-space: nowrap; }
+  /* aside.sidebar: outranks the desktop rules further down the file. */
+  aside.sidebar > .auth-status {
+    margin: 0 0 0 auto; padding: 0; border-top: 0;
+    flex-direction: row; align-items: center; white-space: nowrap;
+  }
 }
 
 /* ---------- aviso de versión nueva ---------- */
@@ -603,6 +608,14 @@ svg.inline-icon, .inline-icon svg { vertical-align: -2px; }
   border-radius: var(--radius-md); padding: var(--space-4) var(--space-5); font: inherit; flex: 1; min-width: 150px;
 }
 .auth-status { display: inline-flex; align-items: center; gap: var(--space-4); font-size: var(--text-sm); color: var(--ink-2); }
+/* Account block at the foot of the sidebar: pinned to the bottom on its own,
+   or right under the admin preview (which already takes margin-top:auto). */
+.sidebar > .auth-status {
+  margin-top: auto; padding-top: var(--space-7); border-top: 1px solid var(--grid);
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3);
+}
+.admin-preview ~ .auth-status { margin-top: 0; }
+.sidebar > .auth-status .auth-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--muted); vertical-align: -1px; }
 .status-dot.online { background: var(--s2); }
 

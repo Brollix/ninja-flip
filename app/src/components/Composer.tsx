@@ -98,7 +98,7 @@ export function AuthStatus() {
   return (
     <span className="auth-status">
       <span className="auth-name"><span className="status-dot online" /> {u?.ingame_name ?? "connected"}</span>
-      <button className="btn" onClick={signOut} title="Sign out of warframe.market in this browser">sign out</button>
+      <button className="linkish" onClick={signOut} title="Sign out of warframe.market in this browser">Sign out</button>
     </span>
   );
 }

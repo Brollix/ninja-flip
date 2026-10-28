@@ -358,18 +358,18 @@ function AppInner() {
           })}
         </nav>
         <AdminPreviewToggle />
+        <AuthStatus />
       </aside>
 
       <div className="main-col">
         <header className="topbar">
           <div className="topbar-inner">
             <div className="topbar-left">
-              <AuthStatus />
-              <span className="topbar-plat">· <PlatBadge last={last} /></span>
+              <span className="topbar-plat"><PlatBadge last={last} /></span>
+              {last && <span className="sub">· {last.ducats} ducats</span>}
             </div>
             <div className="topbar-right sub">
               {[
-                last && <>MR {last.mr} · {(last.credits / 1e6).toFixed(1)}M credits · {last.ducats} ducats</>,
                 gameRunning != null && (gameRunning
                   ? <><Gamepad2 size={13} className="inline-icon" /> game running</>
                   : <><CircleOff size={13} className="inline-icon" /> game closed</>),
