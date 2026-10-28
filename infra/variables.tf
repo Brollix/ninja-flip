@@ -1,6 +1,7 @@
 variable "project_id" {
-  description = "GCP project ID (el técnico, no el nombre lindo — 'gcloud projects list')"
+  description = "GCP project ID (the technical ID, not the display name — 'gcloud projects list')"
   type        = string
+  default     = "ninjaflip"
 }
 
 variable "region" {

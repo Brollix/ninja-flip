@@ -39,19 +39,19 @@ resource "google_cloud_run_v2_service" "web" {
         name  = "REPORT_SERVICE_URL"
         value = google_cloud_run_v2_service.report.uri
       }
-      # Premium por Patreon (ver server/src/routes/premium.ts) — OAuth real por
-      # usuario ("Connect with Patreon"): PATREON_REDIRECT_URI tiene que ser
-      # EXACTAMENTE la misma URL registrada en el Developer Portal de Patreon
-      # como "Redirect URIs" del Client (hardcodeada a propósito: referenciar
-      # google_cloud_run_v2_service.web.uri desde adentro de este mismo
-      # recurso sería una dependencia circular). No es secreta (es pública,
-      # la ve cualquiera en la barra de direcciones), por eso va como env
-      # plano y no como Secret Manager. Si el dominio cambia (ver el punto
-      # pendiente de comprar ninjaflip.com), actualizar acá Y en el Redirect
-      # URI del Client en Patreon.
+      # Patreon premium (see server/src/routes/premium.ts) — real per-user
+      # OAuth ("Connect with Patreon"): PATREON_REDIRECT_URI must be EXACTLY
+      # the URL registered as the Client's "Redirect URIs" in the Patreon
+      # Developer Portal. Hardcoded on purpose: referencing
+      # google_cloud_run_v2_service.web.uri from inside this same resource
+      # would be a circular dependency. Uses Cloud Run's deterministic URL
+      # (<service>-<project number>.<region>.run.app), so it's known before
+      # the service exists. Not secret (anyone sees it in the address bar),
+      # hence a plain env and not Secret Manager. If the domain changes
+      # (e.g. buying ninjaflip.com), update it here AND in Patreon.
       env {
         name  = "PATREON_REDIRECT_URI"
-        value = "https://warframe-plat-trader-web-qptpzf6lka-ue.a.run.app/api/patreon/callback"
+        value = "https://warframe-plat-trader-web-179508033489.us-east1.run.app/api/patreon/callback"
       }
       env {
         name = "PATREON_CLIENT_ID"

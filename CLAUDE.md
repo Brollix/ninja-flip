@@ -3,29 +3,38 @@
 Instructions for Claude Code working in this repo. See [README.md](README.md)
 for what the app does and its architecture.
 
-## Current status: GCP infra torn down (2026-09-14)
+## Current status: moving to the new `ninjaflip` project (2026-10-28)
 
-All GCP resources for `warframe-plat-trader` were destroyed via
-`terraform destroy` to stop billing while the project is on hold — nothing
-is running. `infra/` still fully describes it, so bringing it back is:
+The old `warframe-plat-trader` GCP project was torn down (2026-09-14) and is
+no longer used. Infra now targets a fresh project, **`ninjaflip`** (project
+number `179508033489`; the ID `ninja-flip` was taken). `infra/variables.tf`
+defaults `project_id` to it, and `deploy.yml` points at its registry, WIF
+provider and deployer service account. Resource names still use
+`app_name = "warframe-plat-trader"`. The local Terraform state is empty, so
+the next apply creates everything from scratch.
 
-1. `terraform apply` in `infra/` with `-var` flags for `project_id`,
-   `web_image`, `report_image`, `scanner_image` (any existing image tag
-   works to bootstrap — `deploy.yml` overwrites it on the next push anyway).
-2. Re-add the `database_url` secret value — the Secret Manager *container*
-   gets recreated by `terraform apply`, but its value was deleted with the
-   old container. Pull the connection string from the Neon dashboard and
-   run `gcloud secrets versions add database-url --data-file=-` (see
-   `infra/secrets.tf` header comments for the other secrets — Patreon,
-   AlecaFrame — which follow the same pattern).
-3. Push to `master` (or re-run the last deploy workflow) to get real images
-   onto the freshly-created services/jobs.
-4. Cloud Scheduler jobs are created **enabled** by `terraform apply` — no
-   extra step needed there.
+The DB is now **Supabase** (session pooler, IPv4), not Neon. The web
+container (Node `pg`) needs `&uselibpqcompat=true` appended to the
+`sslmode=require` URL. The Python services (psycopg) reject that param, so
+they get the plain URL.
 
-Neon itself was left alone (Terraform never managed it) — it auto-suspends
-compute on inactivity, so no action was needed to stop its billing beyond
-not querying it.
+Bringing it up (needs billing linked to `ninjaflip` first):
+
+1. `terraform apply -target=google_project_service.this
+   -target=google_artifact_registry_repository.images` to get the APIs and
+   the registry. The Cloud Run resources can't be created until their
+   images exist in the new registry.
+2. Build and push the three images (web, report, scanner) to
+   `us-east1-docker.pkg.dev/ninjaflip/warframe-plat-trader`.
+3. Full `terraform apply` with the `-var` image flags.
+4. Add the secret values with `gcloud secrets versions add` (see the
+   `infra/secrets.tf` header): `database-url` from Supabase, plus Patreon
+   and AlecaFrame if used.
+5. After that, pushes to `master` deploy normally.
+
+Patreon's redirect URI is now the deterministic Cloud Run URL
+`https://warframe-plat-trader-web-179508033489.us-east1.run.app/api/patreon/callback`.
+It must also be registered in the Patreon Developer Portal.
 
 ## Deploy
 
