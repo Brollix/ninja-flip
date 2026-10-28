@@ -12,8 +12,8 @@ still GCP-only, and they're kept only as a reference for the AWS port. Don't
 apply them. Nothing is deployed right now, and the app runs locally via
 `docker-compose.yml` (with a Cloudflare quick tunnel).
 
-The old `warframe-plat-trader` GCP project was torn down (2026-09-14) and is
-no longer used. Infra had been pointed at a fresh project, **`ninjaflip`**
+The old `warframe-plat-trader` GCP project was torn down (2026-09-14), and
+the project itself was deleted on 2026-10-28. Infra had been pointed at a fresh project, **`ninjaflip`**
 (project number `179508033489`; the ID `ninja-flip` was taken). `infra/variables.tf`
 defaults `project_id` to it, and `deploy.yml` points at its registry, WIF
 provider and deployer service account. Resource names still use
