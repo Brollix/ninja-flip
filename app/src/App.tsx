@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { Flip, HistoryPoint, Relic, Report } from "./types";
 import { currentPlat, loadData, prepareRelics, type ReportError } from "./lib";
 import { getJwt, getPreviewMode, getUser, isAdmin, onAuthChange, setPlatOverride, setPreviewMode, syncLedger, syncPremiumStatus } from "./wfm";
@@ -7,7 +7,6 @@ import { DucatsView, FlipsView, HuntView, RelicsView, SummaryView } from "./comp
 import { OrdersView } from "./components/OrdersView";
 import { AuthStatus, Composer } from "./components/Composer";
 import { Landing } from "./components/Landing";
-import { PeakTimeBadge } from "./components/PeakTime";
 import { TierModal } from "./components/TierModal";
 import { ErrorBoundary, Plat } from "./components/ui";
 import {
@@ -369,27 +368,20 @@ function AppInner() {
               <span className="topbar-plat">· <PlatBadge last={last} /></span>
             </div>
             <div className="topbar-right sub">
-              <PeakTimeBadge />
-              {last && <> · MR {last.mr} · {(last.credits / 1e6).toFixed(1)}M credits · {last.ducats} ducats</>}
-              {gameRunning != null && (
-                <> · {gameRunning
+              {[
+                last && <>MR {last.mr} · {(last.credits / 1e6).toFixed(1)}M credits · {last.ducats} ducats</>,
+                gameRunning != null && (gameRunning
                   ? <><Gamepad2 size={13} className="inline-icon" /> game running</>
-                  : <><CircleOff size={13} className="inline-icon" /> game closed</>}</>
-              )}
-              {gameReminder && <> · {gameReminder}</>}
-              {report && (
-                <>
-                  {" "}· data from {new Date(report.generated_ts * 1000).toLocaleString()}
-                  {" "}· <button className="linkish" disabled={refreshing} onClick={() => refresh({ refresh: true })}
-                                  title="Just closed a trade? This skips the 15-min cache and re-checks AlecaFrame now">
+                  : <><CircleOff size={13} className="inline-icon" /> game closed</>),
+                gameReminder,
+                report && <>data from {new Date(report.generated_ts * 1000).toLocaleString()}</>,
+                report && (
+                  <button className="linkish" disabled={refreshing} onClick={() => refresh({ refresh: true })}
+                          title="Just closed a trade? This skips the 15-min cache and re-checks AlecaFrame now">
                     <RefreshCw size={12} className={`inline-icon ${refreshing ? "spin" : ""}`} /> {refreshing ? "refreshing…" : "refresh"}
                   </button>
-                </>
-              )}
-              {!report && (
-                <> · <button className="linkish" onClick={() => setTab("overview")}>
-                  <Link2 size={12} className="inline-icon" /> connect AlecaFrame</button></>
-              )}
+                ),
+              ].filter(Boolean).map((part, i) => <Fragment key={i}>{i > 0 && " · "}{part}</Fragment>)}
             </div>
           </div>
         </header>

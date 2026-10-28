@@ -505,16 +505,7 @@ svg.inline-icon, .inline-icon svg { vertical-align: -2px; }
   font: var(--weight-semibold) var(--text-xl) var(--font-display); color: var(--s2);
   margin-bottom: var(--space-8); text-align: center;
 }
-/* ---------- peak trading time badge ---------- */
-.peak-badge {
-  display: inline-flex; align-items: center; gap: var(--space-2);
-  font-size: var(--text-xs); color: var(--ink-2);
-}
-.landing-live .peak-badge {
-  display: flex; justify-content: center; font-size: var(--text-sm);
-  margin-bottom: var(--space-6); color: var(--ink-2);
-}
-.landing-hero { text-align: center; margin-bottom: var(--space-12); }
+.landing-live .landing-hero { text-align: center; margin-bottom: var(--space-12); }
 .landing-title { font: var(--weight-bold) 40px var(--font-display); margin: 0 0 var(--space-3); color: var(--accent); }
 .landing-tagline { font-size: var(--text-lg); color: var(--ink-2); margin: 0 0 var(--space-6); }
 .landing-features {

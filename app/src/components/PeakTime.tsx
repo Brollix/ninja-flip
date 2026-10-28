@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { Flame, Clock } from "lucide-react";
 
 interface Bucket { ts: string; volume: number }
 
-// Compartido a nivel módulo (no por-instancia del hook) — PeakTimeBadge (en
-// el header, siempre montado) y PeakTimeChart (dentro de FlipsView) llamaban
-// usePeakTimeData() cada uno por su cuenta, así que tener las dos montadas
-// a la vez disparaba el mismo fetch dos veces. Con esto, el segundo caller
-// reusa el fetch en vuelo del primero, y un resultado de menos de
-// SHARED_TTL_MS no vuelve a pedirse en absoluto.
+// Shared at module level (not per hook instance) — usePeakTime (My Orders)
+// and PeakTimeChart (inside FlipsView) each call usePeakTimeData(), so
+// having both mounted at once fired the same fetch twice. With this, the
+// second caller reuses the first one's in-flight fetch, and a result younger
+// than SHARED_TTL_MS isn't requested again at all.
 const SHARED_TTL_MS = 60_000;
 let sharedBuckets: Bucket[] | null = null;
 let sharedAt = 0;
@@ -74,28 +72,6 @@ export function usePeakTime() {
   const minsSince = ((nowMins - peakMins) % 1440 + 1440) % 1440;
   const minsUntil = (1440 - minsSince) % 1440;
   return { peakHour, isPeakNow, minsUntil, minsSince };
-}
-
-function fmtHour(hour: number): string {
-  return `${String(hour).padStart(2, "0")}:00`;
-}
-
-export function PeakTimeBadge() {
-  const peak = usePeakTime();
-  if (!peak) return null;
-  const { isPeakNow, peakHour, minsUntil, minsSince } = peak;
-  // Si el pico pasó hace poco (<12h) es más útil decir "hace cuánto" que
-  // "falta 22h" para el próximo — evita que un pico reciente se sienta lejano.
-  const wasRecent = !isPeakNow && minsSince < 12 * 60;
-  return (
-    <span className="peak-badge" title={`Busiest trading hour across all scanned items: ${fmtHour(peakHour)}`}>
-      {isPeakNow
-        ? <><Flame size={13} className="inline-icon" /> Peak trading hour — now</>
-        : wasRecent
-        ? <><Flame size={13} className="inline-icon" /> Peak trading hour was {Math.floor(minsSince / 60)}h {minsSince % 60}m ago</>
-        : <><Clock size={13} className="inline-icon" /> Peak trading in {Math.floor(minsUntil / 60)}h {minsUntil % 60}m</>}
-    </span>
-  );
 }
 
 // ---------- curva de actividad (estilo steamdb) ----------
