@@ -52,9 +52,8 @@ export function Landing() {
       <div className="landing-narrow">
         <div className="landing-hero">
           <h1 className="landing-title">NinjaFlip</h1>
-          <p className="landing-tagline">Turn Warframe platinum into more platinum.</p>
-          <p className="hint standalone">
-            A trading companion for warframe.market — not a replacement, an add-on for people who flip regularly.
+          <p className="landing-tagline">
+            A warframe.market add-on for people who flip regularly — grow your platinum without living on the order book.
           </p>
         </div>
 
