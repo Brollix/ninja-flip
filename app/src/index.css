@@ -612,10 +612,15 @@ svg.inline-icon, .inline-icon svg { vertical-align: -2px; }
    or right under the admin preview (which already takes margin-top:auto). */
 .sidebar > .auth-status {
   margin-top: auto; padding-top: var(--space-7); border-top: 1px solid var(--grid);
-  display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3);
+  display: flex; flex-direction: column; align-items: center; text-align: center; gap: var(--space-4);
 }
 .admin-preview ~ .auth-status { margin-top: 0; }
-.sidebar > .auth-status .auth-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar > .auth-status .auth-name {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 18px; font-weight: var(--weight-semibold); color: var(--ink);
+}
+.sidebar > .auth-status .status-dot { width: 12px; height: 12px; vertical-align: 0; }
+.sidebar > .auth-status .linkish { font-size: var(--text-md); }
 .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--muted); vertical-align: -1px; }
 .status-dot.online { background: var(--s2); }
 
