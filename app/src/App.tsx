@@ -260,7 +260,17 @@ function AppInner() {
 
   useEffect(() => {
     refresh();
-    return onAuthChange(refresh); // reintenta solo al conectar/desconectar wfm
+    // reintenta solo al conectar/desconectar wfm; al conectar, Flips es lo
+    // primero útil (no necesita AlecaFrame) — no el tab por default. Solo en
+    // la transición sin sesión -> con sesión: el mismo pub/sub también avisa
+    // cambios de premium/preview, y eso no te tiene que sacar del tab.
+    let wasSignedIn = !!getJwt();
+    return onAuthChange(() => {
+      const signedIn = !!getJwt();
+      if (signedIn && !wasSignedIn) setTab("flips");
+      wasSignedIn = signedIn;
+      refresh();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
