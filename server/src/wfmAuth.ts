@@ -1,5 +1,10 @@
 import type { NextFunction, Request, Response } from "express";
 
+// Sin User-Agent, el fetch de Node cae en el challenge anti-bot de Cloudflare
+// de warframe.market desde IPs residenciales (403 "Just a moment...") — desde
+// Cloud Run pasaba igual. Los scripts de Python ya mandan el suyo.
+export const WFM_USER_AGENT = "ninjaflip-web/1.0";
+
 /** No hay signup propio: la identidad ES la cuenta de warframe.market.
  *  El browser ya tiene el JWT (localStorage, wfm.ts signIn()) para postear
  *  órdenes — se lo mandamos también acá como Bearer y lo verificamos contra
@@ -45,7 +50,7 @@ export async function requireWfmUser(req: Request, res: Response, next: NextFunc
   }
   try {
     const r = await fetch("https://api.warframe.market/v2/me", {
-      headers: { Authorization: `Bearer ${jwt}` },
+      headers: { Authorization: `Bearer ${jwt}`, "User-Agent": WFM_USER_AGENT },
     });
     const body = (await r.json().catch(() => ({}))) as WfmMeResponse;
     const wfmUserId = body.data?.id ?? body.data?.slug;

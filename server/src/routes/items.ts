@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { asyncHandler } from "../asyncHandler.js";
+import { WFM_USER_AGENT } from "../wfmAuth.js";
 
 // Catálogo completo de warframe.market (id -> [slug, nombre]) — antes
 // app/public/data/items.json, generado a mano junto al report. No es
@@ -13,7 +14,7 @@ const TTL_MS = 24 * 3600 * 1000;
 
 itemsRouter.get("/", asyncHandler(async (_req, res) => {
   if (!cache || Date.now() - cacheAt > TTL_MS) {
-    const r = await fetch("https://api.warframe.market/v2/items");
+    const r = await fetch("https://api.warframe.market/v2/items", { headers: { "User-Agent": WFM_USER_AGENT } });
     if (!r.ok) {
       res.status(502).json({ error: `warframe.market items ${r.status}` });
       return;

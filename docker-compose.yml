@@ -11,6 +11,10 @@ services:
       # Fuera de GCP no hay metadata server: fetchIdToken devuelve null y la
       # llamada sale sin Bearer, que "report" acá no exige.
       REPORT_SERVICE_URL: http://report:8080
+      # pg (Node) trata sslmode=require como verify-full y rechaza la cadena
+      # del pooler de Supabase; con esto usa la semántica de libpq (cifra sin
+      # verificar CA), igual que psycopg en report/scanner.
+      DATABASE_URL: ${DATABASE_URL}&uselibpqcompat=true
     ports: ["8080:8080"]
     depends_on: [report]
     restart: unless-stopped

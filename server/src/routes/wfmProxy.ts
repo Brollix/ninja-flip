@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { asyncHandler } from "../asyncHandler.js";
+import { WFM_USER_AGENT } from "../wfmAuth.js";
 
 // Reemplaza el proxy /wfm del dev server de Vite: api.warframe.market no
 // manda CORS, así que el browser no puede pegarle directo ni en local ni
@@ -13,7 +14,7 @@ const FORWARD_REQUEST_HEADERS = ["authorization", "content-type"];
 
 wfmProxyRouter.all("*", asyncHandler(async (req, res) => {
   const target = `https://api.warframe.market${req.path}`;
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { "user-agent": WFM_USER_AGENT };
   for (const h of FORWARD_REQUEST_HEADERS) {
     const v = req.header(h);
     if (v) headers[h] = v;
