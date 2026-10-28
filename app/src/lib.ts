@@ -133,8 +133,11 @@ export async function loadData(opts: { refresh?: boolean } = {}): Promise<{
     const reportError = body.error === "no_aleca_token" ? "no_aleca_token" : `${body.error ?? (repRes ? repRes.status : "network_error")}`;
     return { report: null, reportError, flips, flipsTs };
   }
-  const report = (await repRes.json()) as Report;
-  return { report, reportError: null, flips, flipsTs };
+  const body = (await repRes.json()) as Report | { error?: string };
+  if ("error" in body && body.error === "no_aleca_token") {
+    return { report: null, reportError: "no_aleca_token", flips, flipsTs };
+  }
+  return { report: body as Report, reportError: null, flips, flipsTs };
 }
 
 /** Mi slug de warframe.market (para excluir mis propias órdenes del libro). */

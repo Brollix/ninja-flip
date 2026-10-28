@@ -23,7 +23,9 @@ reportRouter.get("/", asyncHandler(async (req, res) => {
   );
   const token = rows[0]?.aleca_public_token;
   if (!token) {
-    res.status(404).json({ error: "no_aleca_token" });
+    // 200 y no 404: no tener token es un estado normal (el usuario todavía no
+    // lo pegó o lo salteó), y un 4xx lo pinta Chrome en rojo en la consola.
+    res.json({ error: "no_aleca_token" });
     return;
   }
   if (!REPORT_SERVICE_URL) {
