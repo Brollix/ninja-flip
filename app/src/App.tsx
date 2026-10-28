@@ -278,9 +278,15 @@ function AppInner() {
     && !(reportError === "no_aleca_token" && !alecaSkipped)
     && !(reportError && reportError !== "no_aleca_token")
     && !(!report && !reportError);
+  // Y al revés: si entrás a /orders sin sesión (link viejo, o te
+  // desconectaste parado ahí), el landing no puede quedar con esa ruta. Se
+  // limpia solo fuera del loading, para no pisar el deep link mientras carga
+  // — el tab ya quedó leído del path al montar.
+  const loading = !report && !reportError && !error;
   useEffect(() => {
     if (dashboardVisible) history.replaceState(null, "", "/" + tab);
-  }, [tab, dashboardVisible]);
+    else if (!loading && location.pathname !== "/") history.replaceState(null, "", "/");
+  }, [tab, dashboardVisible, loading]);
 
   const gameRunning = useGameRunning();
   const gameReminder = useGameStatusReminder(gameRunning);
