@@ -268,6 +268,9 @@ function AppInner() {
     return onAuthChange(() => {
       const signedIn = !!getJwt();
       if (signedIn && !wasSignedIn) setTab("flips");
+      // Sign out: al landing ya, sin esperar a que refresh() vuelva de
+      // /api/flips — si no, el dashboard queda visible un rato sin sesión.
+      if (!signedIn && wasSignedIn) { setReport(null); setReportError("not_signed_in"); }
       wasSignedIn = signedIn;
       refresh();
     });
