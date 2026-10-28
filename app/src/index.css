@@ -189,6 +189,26 @@ h1 { font: var(--weight-bold) var(--text-lg) var(--font-display); margin: 0 0 va
   color: var(--ink); text-align: center; transition: background var(--transition-fast);
 }
 .patreon-banner.clickable:hover { background: var(--accent-bg); }
+.aleca-connect {
+  width: min(440px, 100%); min-height: 620px; margin: var(--space-11) auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-6);
+  padding: var(--space-11) var(--space-10); text-align: center;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm); color: var(--ink-2); font-size: var(--text-md);
+}
+.aleca-connect h2 { margin: 0; color: var(--ink); font: var(--weight-bold) var(--text-xl) var(--font-display); }
+.aleca-connect p { margin: 0; max-width: 42ch; line-height: 1.5; }
+.aleca-connect-icon {
+  display: grid; place-items: center; width: 64px; height: 64px; border-radius: 50%;
+  background: var(--accent-bg); color: var(--accent);
+}
+.aleca-connect-steps { margin: 0; padding-left: 1.2em; text-align: left; display: flex; flex-direction: column; gap: var(--space-3); }
+.aleca-connect-steps b { color: var(--ink); }
+.aleca-connect-form { display: flex; gap: var(--space-4); width: 100%; }
+.aleca-connect-form input {
+  flex: 1 1 auto; min-width: 0; background: var(--page); color: var(--ink); border: 1px solid var(--axis);
+  border-radius: var(--radius-md); padding: var(--space-5) var(--space-6); font: inherit;
+}
 .aleca-banner { display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); }
 .patreon-banner-cta { color: var(--accent); font-weight: var(--weight-bold); white-space: nowrap; }
 

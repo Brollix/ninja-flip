@@ -32,12 +32,7 @@ type TabId = (typeof TABS)[number]["id"];
 // (locked) so people know they exist — the connect prompt lives inside the
 // tab, at the moment someone actually wants that feature, instead of a
 // blocking screen right after login.
-const ALECA_FEATURES: Partial<Record<TabId, string>> = {
-  overview: "your inventory value, platinum history and recent sales",
-  hunt: "which relics are worth farming next, based on what you already own",
-  relics: "which of your relics are worth cracking",
-  ducats: "which of your prime parts are worth more as ducats",
-};
+const ALECA_TABS: ReadonlySet<TabId> = new Set(["overview", "hunt", "relics", "ducats"]);
 
 /** Solo visible para el admin (ver ALWAYS_PREMIUM_SLUGS/ADMIN_SLUGS en wfm.ts)
  *  — no hay Patreon conectado todavía, así que esto deja previsualizar cómo
@@ -113,7 +108,7 @@ function PlatBadge({ last }: { last: HistoryPoint | null }) {
  *  wfm_user_id — each user stores their own (there's no global
  *  ALECA_PUBLIC_TOKEN in .env anymore). Flips/My Orders don't need it, so
  *  this never blocks the whole app. */
-function AlecaConnect({ feature, onSaved }: { feature: string; onSaved: () => void }) {
+function AlecaConnect({ onSaved }: { onSaved: () => void }) {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -138,13 +133,19 @@ function AlecaConnect({ feature, onSaved }: { feature: string; onSaved: () => vo
   }
 
   return (
-    <div className="premium-lock">
-      <p><Lock size={14} className="inline-icon" /> <b>Connect AlecaFrame</b> to see {feature}.</p>
-      <p className="hint">
-        Optional — Flips and My Orders work without it. In AlecaFrame, open the <b>Stats</b> tab,
-        click <b>Create Public Link</b> and paste the token here. Saved once, just for your account.
+    <div className="aleca-connect">
+      <div className="aleca-connect-icon"><Lock size={28} /></div>
+      <h2>Connect AlecaFrame</h2>
+      <p>
+        This tab works with your in-game items and trade history, synced from AlecaFrame,
+        to show you what they're worth and what to do with them.
       </p>
-      <div className="premium-lock-connect">
+      <ol className="aleca-connect-steps">
+        <li>Open AlecaFrame and go to the <b>Stats</b> tab</li>
+        <li>Click <b>Create Public Link</b></li>
+        <li>Paste the token below</li>
+      </ol>
+      <div className="aleca-connect-form">
         <input type="text" placeholder="AlecaFrame public token" value={token}
                onChange={e => setToken(e.target.value)}
                onKeyDown={e => e.key === "Enter" && !busy && token.trim() && save()} />
@@ -153,6 +154,7 @@ function AlecaConnect({ feature, onSaved }: { feature: string; onSaved: () => vo
         </button>
       </div>
       {err && <p className="loss">{err}</p>}
+      <p className="hint">Optional — Flips and My Orders work without it. Saved once, just for your account.</p>
     </div>
   );
 }
@@ -336,7 +338,7 @@ function AppInner() {
   const last = report?.history?.length ? report.history[report.history.length - 1] : null;
   const plat = currentPlat(last?.plat ?? 0);
   const activeTab = tab;
-  const lockedFeature = !report ? ALECA_FEATURES[activeTab] : undefined;
+  const locked = !report && ALECA_TABS.has(activeTab);
 
   return (
     <div className="app-shell">
@@ -344,14 +346,14 @@ function AppInner() {
         <div className="sidebar-brand">NinjaFlip</div>
         <nav className="sidebar-nav">
           {TABS.map(t => {
-            const locked = !report && !!ALECA_FEATURES[t.id];
+            const tabLocked = !report && ALECA_TABS.has(t.id);
             return (
               <button key={t.id}
-                      className={`sidebar-tab ${activeTab === t.id ? "active" : ""} ${locked ? "locked" : ""}`}
-                      title={locked ? "Requires AlecaFrame (optional)" : undefined}
+                      className={`sidebar-tab ${activeTab === t.id ? "active" : ""} ${tabLocked ? "locked" : ""}`}
+                      title={tabLocked ? "Requires AlecaFrame (optional)" : undefined}
                       onClick={() => setTab(t.id)}>
                 <t.Icon size={15} strokeWidth={2} /> {t.label}
-                {locked && <Lock size={12} className="sidebar-tab-lock" />}
+                {tabLocked && <Lock size={12} className="sidebar-tab-lock" />}
               </button>
             );
           })}
@@ -405,7 +407,7 @@ function AppInner() {
         <Composer />
 
         <main className="main-content">
-          {lockedFeature && <AlecaConnect feature={lockedFeature} onSaved={refresh} />}
+          {locked && <AlecaConnect onSaved={refresh} />}
           {activeTab === "overview" && report && <SummaryView relics={relics} sales={report.sales} history={report.history ?? []} />}
           {activeTab === "flips" && <FlipsView flips={flips} flipsTs={flipsTs} startPlat={plat} />}
           {activeTab === "orders" && <OrdersView defaultUser={report?.username ?? getUser()?.ingame_name ?? ""} basePlat={plat} unsoldPurchases={report?.unsold_purchases ?? []} flips={flips} />}
