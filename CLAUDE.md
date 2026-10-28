@@ -3,11 +3,18 @@
 Instructions for Claude Code working in this repo. See [README.md](README.md)
 for what the app does and its architecture.
 
-## Current status: moving to the new `ninjaflip` project (2026-10-28)
+## Current status: leaving GCP for AWS (2026-10-28)
+
+**GCP is being abandoned in favor of AWS.** The `ninjaflip` GCP project
+described below was created and then deleted the same day (2026-10-28),
+before anything was deployed. The `infra/` Terraform and `deploy.yml` are
+still GCP-only, and they're kept only as a reference for the AWS port. Don't
+apply them. Nothing is deployed right now, and the app runs locally via
+`docker-compose.yml` (with a Cloudflare quick tunnel).
 
 The old `warframe-plat-trader` GCP project was torn down (2026-09-14) and is
-no longer used. Infra now targets a fresh project, **`ninjaflip`** (project
-number `179508033489`; the ID `ninja-flip` was taken). `infra/variables.tf`
+no longer used. Infra had been pointed at a fresh project, **`ninjaflip`**
+(project number `179508033489`; the ID `ninja-flip` was taken). `infra/variables.tf`
 defaults `project_id` to it, and `deploy.yml` points at its registry, WIF
 provider and deployer service account. Resource names still use
 `app_name = "warframe-plat-trader"`. The local Terraform state is empty, so
