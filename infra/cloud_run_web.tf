@@ -15,13 +15,13 @@ resource "google_cloud_run_v2_service" "web" {
     # /api/report aunque el trabajo de fondo hubiera terminado bien.
     timeout = "600s"
 
-    # minScale=0 (default) apaga el container entero cuando nadie lo usa —
-    # la próxima visita paga un cold start completo antes de responder algo.
-    # Con pocos usuarios (vos + amigos) eso es "tarda como 5-10s en cargar
-    # de la nada" bastante seguido. 1 instancia siempre viva lo evita.
+    # Scale to zero: an always-on instance costs ~$7-10/month even idle, and
+    # the Node server starts in about a second (with the startup CPU boost
+    # below), so the occasional cold start is cheaper than paying 24/7.
+    # The max caps the bill if someone hammers the public URL.
     scaling {
-      min_instance_count = 1
-      max_instance_count = 20
+      min_instance_count = 0
+      max_instance_count = 3
     }
 
     containers {
@@ -53,51 +53,34 @@ resource "google_cloud_run_v2_service" "web" {
         name  = "PATREON_REDIRECT_URI"
         value = "https://warframe-plat-trader-web-179508033489.us-east1.run.app/api/patreon/callback"
       }
-      env {
-        name = "PATREON_CLIENT_ID"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.patreon_client_id.secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
-        name = "PATREON_CLIENT_SECRET"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.patreon_client_secret.secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
-        name = "PATREON_CREATOR_ACCESS_TOKEN"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.patreon_creator_access_token.secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
-        name = "PATREON_CREATOR_REFRESH_TOKEN"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.patreon_creator_refresh_token.secret_id
-            version = "latest"
+      # Cloud Run refuses a revision that references a secret with no
+      # version, so these are only wired once the Patreon values exist
+      # (var.patreon_enabled). Without them /api/patreon answers "not
+      # configured" and the rest of the site works.
+      dynamic "env" {
+        for_each = var.patreon_enabled ? {
+          PATREON_CLIENT_ID             = google_secret_manager_secret.patreon_client_id.secret_id
+          PATREON_CLIENT_SECRET         = google_secret_manager_secret.patreon_client_secret.secret_id
+          PATREON_CREATOR_ACCESS_TOKEN  = google_secret_manager_secret.patreon_creator_access_token.secret_id
+          PATREON_CREATOR_REFRESH_TOKEN = google_secret_manager_secret.patreon_creator_refresh_token.secret_id
+        } : {}
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
           }
         }
       }
       resources {
-        limits   = { cpu = "1", memory = "512Mi" }
-        # cpu_idle=true (default) = la CPU solo se cobra mientras atiende un
-        # request, no las 24hs que la instancia queda viva por min_instance_count.
-        # Sin esto (cpu_idle=false, "CPU siempre asignada") el costo idle de
-        # esta única instancia salía ~$60-65/mes de más sin ningún beneficio
-        # real — no corremos nada en background (sin websockets, sin threads
-        # fuera de un request) que lo justifique.
-        cpu_idle = true
+        limits = { cpu = "1", memory = "512Mi" }
+        # Request-based billing: CPU is only charged while serving a request.
+        # Nothing here runs in the background (no websockets, no work outside
+        # a request), so "CPU always allocated" would be pure extra cost.
+        cpu_idle          = true
+        startup_cpu_boost = true
       }
     }
   }

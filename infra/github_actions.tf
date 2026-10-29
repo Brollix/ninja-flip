@@ -83,20 +83,20 @@ resource "google_cloud_run_v2_job_iam_member" "github_deployer_updates_report_wa
 # resto de este archivo.
 resource "google_service_account_iam_member" "github_deployer_actas_web" {
   service_account_id = "projects/${var.project_id}/serviceAccounts/${var.app_name}-web@${var.project_id}.iam.gserviceaccount.com"
-  role                = "roles/iam.serviceAccountUser"
-  member              = "serviceAccount:${google_service_account.github_deployer.email}"
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.github_deployer.email}"
 }
 
 resource "google_service_account_iam_member" "github_deployer_actas_report" {
   service_account_id = "projects/${var.project_id}/serviceAccounts/${var.app_name}-report@${var.project_id}.iam.gserviceaccount.com"
-  role                = "roles/iam.serviceAccountUser"
-  member              = "serviceAccount:${google_service_account.github_deployer.email}"
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.github_deployer.email}"
 }
 
 resource "google_service_account_iam_member" "github_deployer_actas_scanner" {
   service_account_id = "projects/${var.project_id}/serviceAccounts/${var.app_name}-scanner@${var.project_id}.iam.gserviceaccount.com"
-  role                = "roles/iam.serviceAccountUser"
-  member              = "serviceAccount:${google_service_account.github_deployer.email}"
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.github_deployer.email}"
 }
 
 # ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ resource "google_iam_workload_identity_pool" "github" {
 
 resource "google_iam_workload_identity_pool_provider" "github" {
   project                            = var.project_id
-  workload_identity_pool_id         = google_iam_workload_identity_pool.github.workload_identity_pool_id
+  workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
   workload_identity_pool_provider_id = "github"
   display_name                       = "GitHub"
 
@@ -140,6 +140,6 @@ resource "google_iam_workload_identity_pool_provider" "github" {
 
 resource "google_service_account_iam_member" "github_deployer_wif_binding" {
   service_account_id = google_service_account.github_deployer.name
-  role                = "roles/iam.workloadIdentityUser"
-  member              = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_repo}"
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_repo}"
 }

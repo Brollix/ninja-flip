@@ -41,6 +41,12 @@ variable "github_repo" {
   default     = "Brollix/ninja-flip"
 }
 
+variable "patreon_enabled" {
+  description = "Wire the Patreon secrets into web. Turn on only after adding a version to each patreon-* secret."
+  type        = bool
+  default     = false
+}
+
 variable "report_ttl_seconds" {
   description = "TTL del cache de reporte por usuario (user_reports)"
   type        = number
